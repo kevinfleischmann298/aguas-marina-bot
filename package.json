@@ -1,0 +1,15 @@
+{
+  "name": "aguas-marina-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp IA Bot para Aguas Marina",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.23.0"
+  }
+}
