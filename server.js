@@ -154,84 +154,60 @@ client.on('message_create', async (message) => {
                 
                 console.log(`🤖 Respondido a ${chatID} y generando PDF...`);
                 
-                // DISEÑO DEL REMITO (Estilo Ticket Térmico pero en A5 para WhatsApp)
-                const doc = new PDFDocument({ margin: 30, size: 'A5' });
-                let buffers = [];
-                doc.on('data', buffers.push.bind(buffers));
-                doc.on('end', async () => {
-                    try {
-                        const pdfData = Buffer.concat(buffers);
-                        const base64Pdf = pdfData.toString('base64');
-                        const media = new MessageMedia('application/pdf', base64Pdf, 'Remito_AguaMarina.pdf');
+                // GENERAR Y ENVIAR PDF CON PUPPETEER (HTML TEMPLATE)
+                try {
+                    const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
+                    const browser = client.pupBrowser;
+                    if (!browser) throw new Error("Puppeteer browser no está disponible.");
+                    
+                    const page = await browser.newPage();
+                    await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
+                    
+                    // Inyectar datos en el DOM de la plantilla
+                    await page.evaluate((data) => {
+                        document.getElementById('cliente').value = data.nombre || '';
+                        document.getElementById('direccion').value = data.direccion || '';
+                        document.getElementById('localidad').value = 'Paraná';
+                        document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
                         
-                        await client.sendMessage(chatID, media, { caption: "📄 Aquí tienes el remito de tu pedido." });
-                        console.log(`✅ PDF enviado a ${chatID}`);
-                    } catch(e) {
-                        console.error("Error enviando PDF:", e);
-                    }
-                });
-
-                // CABECERA AGUA MARINA
-                doc.fontSize(20).font('Helvetica-Bold').text('Agua Marina', { align: 'center' });
-                doc.fontSize(10).font('Helvetica').text('La pureza de la limpieza', { align: 'center' });
-                doc.moveDown(0.5);
-                doc.fontSize(9).text('J.M. Zuviria 1612', { align: 'center' });
-                doc.text('Tel.: 0343 434 19 21', { align: 'center' });
-                doc.text('Administración 155 033 205', { align: 'center' });
-                doc.text('aguamarinasrl@gmail.com', { align: 'center' });
-                doc.text('IG/FB: @aguamarinasrl', { align: 'center' });
-                doc.moveDown(0.5);
-                doc.fontSize(8).text('Productos De Limpieza Para Empresas e Instituciones y El Hogar', { align: 'center' });
-                
-                doc.moveDown();
-                doc.rect(30, doc.y, 360, 0).stroke(); // Línea separadora
-                doc.moveDown(0.5);
-
-                // DATOS DEL REMITO Y CLIENTE
-                doc.fontSize(14).font('Helvetica-Bold').text('REMITO  [ R ]', { align: 'right' });
-                doc.fontSize(10).font('Helvetica').text(`Fecha: ${new Date().toLocaleDateString('es-AR')}`, { align: 'right' });
-                
-                doc.moveUp(2);
-                doc.fontSize(10).font('Helvetica-Bold').text('DATOS DEL CLIENTE:');
-                doc.font('Helvetica').text(`Sr.(s): ${remitoData.nombre || '-'}`);
-                doc.text(`Dirección: ${remitoData.direccion || '-'}`);
-                doc.text(`Localidad: PARANA`);
-                doc.text(`Email: ${remitoData.email || '-'}`);
-                doc.text(`Horario Entrega: ${remitoData.horario || '-'}`);
-                
-                doc.moveDown(0.5);
-                doc.rect(30, doc.y, 360, 0).stroke(); // Línea separadora
-                doc.moveDown();
-
-                // TABLA DE PRODUCTOS
-                doc.fontSize(9).font('Helvetica-Bold');
-                doc.text('Cant', 30, doc.y, { continued: true, width: 30 });
-                doc.text('Artículo', 70, doc.y, { continued: true, width: 170 });
-                doc.text('Total', 250, doc.y, { align: 'right', width: 140 });
-                doc.moveDown(0.5);
-                
-                doc.font('Helvetica');
-                if (remitoData.productos && remitoData.productos.length > 0) {
-                    remitoData.productos.forEach(p => {
-                        const startY = doc.y;
-                        doc.text(p.cantidad.toString(), 30, startY, { width: 30 });
-                        doc.text(p.descripcion, 70, startY, { width: 170 });
-                        doc.text(p.subtotal.toString(), 250, startY, { align: 'right', width: 140 });
+                        // Limpiar filas iniciales
+                        document.getElementById('rows').innerHTML = '';
+                        
+                        if (data.productos && data.productos.length > 0) {
+                            data.productos.forEach(p => {
+                                // Limpiar subtotal de símbolos y convertir a número (Ej: "$ 6.000,50" -> 6000.50)
+                                let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
+                                subStr = subStr.replace(',', '.');
+                                let sub = parseFloat(subStr) || 0;
+                                let cant = parseFloat(p.cantidad) || 1;
+                                let unit = sub / cant;
+                                
+                                window.addRow(p.descripcion, cant, unit);
+                            });
+                        } else {
+                            window.addRow('Detalle gestionado por WhatsApp', 1, 0);
+                        }
+                        
+                        window.recalc();
+                    }, remitoData);
+                    
+                    // Generar PDF estilo "Print"
+                    const pdfBuffer = await page.pdf({ 
+                        format: 'A4', 
+                        printBackground: true,
+                        margin: { top: 0, right: 0, bottom: 0, left: 0 }
                     });
-                } else {
-                    doc.text('Detalle gestionado por WhatsApp', 30, doc.y);
+                    
+                    await page.close();
+                    
+                    const base64Pdf = pdfBuffer.toString('base64');
+                    const media = new MessageMedia('application/pdf', base64Pdf, 'Remito_AguaMarina.pdf');
+                    
+                    await client.sendMessage(chatID, media, { caption: "📄 Aquí tienes el remito de tu pedido." });
+                    console.log(`✅ PDF HTML enviado a ${chatID}`);
+                } catch(e) {
+                    console.error("Error generando PDF HTML:", e);
                 }
-                
-                doc.moveDown();
-                doc.rect(30, doc.y, 360, 0).stroke(); // Línea separadora
-                doc.moveDown();
-                
-                // TOTAL
-                doc.fontSize(14).font('Helvetica-Bold').text(`TOTAL: ${remitoData.total || '$0'}`, { align: 'right' });
-                doc.moveDown(2);
-                doc.fontSize(9).font('Helvetica-Oblique').text('Usted fue atendido por Agua Marina. ¡Gracias por su compra!', { align: 'center' });
-                
-                doc.end();
 
             } catch(e) {
                 console.error("Error parseando el JSON del remito:", e);
