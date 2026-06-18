@@ -129,16 +129,24 @@ client.on('message_create', async (message) => {
         }
 
         // INTERCEPTAR EL REMITO SI EXISTE
-        const remitoRegex = /\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/;
-        const match = aiResponse.match(remitoRegex);
+        let match = aiResponse.match(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/i);
+        
+        // Respaldo por si la IA usa bloques de código markdown
+        if (!match) {
+            match = aiResponse.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
+        }
+        // Respaldo por si la IA solo escupe JSON crudo al final
+        if (!match) {
+            match = aiResponse.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
+        }
         
         let mensajeFinal = aiResponse;
         
         if (match && match[1]) {
             try {
                 const remitoData = JSON.parse(match[1].trim());
-                // Limpiar la etiqueta del mensaje final
-                mensajeFinal = aiResponse.replace(remitoRegex, '').trim();
+                // Limpiar la etiqueta o el JSON del mensaje final
+                mensajeFinal = aiResponse.replace(match[0], '').trim();
                 
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
                 sesion.lastBotResponse = mensajeFinal;
