@@ -43,17 +43,42 @@ let cacheCatalogoReducido = '';
 let lastFetchTime = 0;
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutos
 
-client.on('message', async (message) => {
-    if (message.from === 'status@broadcast' || message.from.includes('@g.us')) return;
+client.on('message_create', async (message) => {
+    // Evitar estados y grupos
+    if (message.from === 'status@broadcast' || message.from.includes('@g.us') || message.to.includes('@g.us')) return;
 
-    const from = message.from;
+    // Identificar el chat real (si es nuestro, usamos 'to', si es del cliente, usamos 'from')
+    const chatID = message.fromMe ? message.to : message.from;
     const body = message.body;
     if (!body || message.hasMedia) return;
 
-    console.log(`\nMensaje recibido de ${from}: ${body}`);
+    // Inicializar memoria del chat si no existe
+    if (!sesiones[chatID]) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
+    const sesion = sesiones[chatID];
 
-    if (!sesiones[from]) sesiones[from] = { carrito: [], historial: [] };
-    const sesion = sesiones[from];
+    // --- LÓGICA DE MODO HUMANO ---
+    if (message.fromMe) {
+        const txt = body.trim().toLowerCase();
+        if (txt === '!bot off') {
+            sesion.botActivo = false;
+            console.log(`🔴 Bot apagado manualmente para ${chatID}`);
+        } else if (txt === '!bot on') {
+            sesion.botActivo = true;
+            console.log(`🟢 Bot reactivado para ${chatID}`);
+        } else if (body !== sesion.lastBotResponse) {
+            // Si mandamos un mensaje nosotros (el humano) y no es el que acaba de mandar el bot...
+            if (sesion.botActivo) {
+                sesion.botActivo = false;
+                console.log(`🔴 Auto-pausa activada: El humano intervino en la conversación con ${chatID}`);
+            }
+        }
+        return; // Salir de la función (no procesar mensajes que enviamos nosotros)
+    }
+
+    // Si el bot está apagado para este cliente, ignorar todo
+    if (!sesion.botActivo) return;
+
+    console.log(`\nMensaje recibido de ${chatID}: ${body}`);
     sesion.historial.push({ role: "user", content: body });
 
     try {
@@ -102,13 +127,14 @@ client.on('message', async (message) => {
         }
 
         sesion.historial.push({ role: "assistant", content: aiResponse });
+        sesion.lastBotResponse = aiResponse; // Guardar última respuesta para la auto-pausa
 
-        await client.sendMessage(from, aiResponse);
-        console.log(`🤖 Respondido a ${from}`);
+        await client.sendMessage(chatID, aiResponse);
+        console.log(`🤖 Respondido a ${chatID}`);
 
     } catch (error) {
         console.error("Error AI:", error.message);
-        await client.sendMessage(from, "Disculpa, estoy experimentando problemas técnicos temporales.");
+        await client.sendMessage(chatID, "Disculpa, estoy experimentando problemas técnicos temporales.");
     }
 });
 
