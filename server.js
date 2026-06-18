@@ -1,8 +1,10 @@
 require('dotenv').config();
 const fs = require('fs');
 const axios = require('axios');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const PDFDocument = require('pdfkit');
+const path = require('path');
 
 console.log("Iniciando Bot de Aguas Marina para Easypanel...");
 
@@ -126,11 +128,78 @@ client.on('message_create', async (message) => {
             aiResponse = "⚠️ Faltan las credenciales de OpenRouter en Easypanel (Environment Variables).";
         }
 
-        sesion.historial.push({ role: "assistant", content: aiResponse });
-        sesion.lastBotResponse = aiResponse; // Guardar última respuesta para la auto-pausa
+        // INTERCEPTAR EL REMITO SI EXISTE
+        const remitoRegex = /\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/;
+        const match = aiResponse.match(remitoRegex);
+        
+        let mensajeFinal = aiResponse;
+        
+        if (match && match[1]) {
+            try {
+                const remitoData = JSON.parse(match[1].trim());
+                // Limpiar la etiqueta del mensaje final
+                mensajeFinal = aiResponse.replace(remitoRegex, '').trim();
+                
+                sesion.historial.push({ role: "assistant", content: mensajeFinal });
+                sesion.lastBotResponse = mensajeFinal;
+                await client.sendMessage(chatID, mensajeFinal);
+                
+                console.log(`🤖 Respondido a ${chatID} y generando PDF...`);
+                
+                // GENERAR Y ENVIAR PDF
+                const doc = new PDFDocument({ margin: 50 });
+                let buffers = [];
+                doc.on('data', buffers.push.bind(buffers));
+                doc.on('end', async () => {
+                    try {
+                        const pdfData = Buffer.concat(buffers);
+                        const base64Pdf = pdfData.toString('base64');
+                        const media = new MessageMedia('application/pdf', base64Pdf, 'Remito_AguaMarina.pdf');
+                        
+                        await client.sendMessage(chatID, media, { caption: "📄 Aquí tienes el comprobante de tu pedido." });
+                        console.log(`✅ PDF enviado a ${chatID}`);
+                    } catch(e) {
+                        console.error("Error enviando PDF:", e);
+                    }
+                });
 
-        await client.sendMessage(chatID, aiResponse);
-        console.log(`🤖 Respondido a ${chatID}`);
+                doc.fontSize(20).text('AGUA MARINA', { align: 'center' });
+                doc.fontSize(12).text('REMITO DE PEDIDO', { align: 'center' });
+                doc.moveDown();
+                doc.fontSize(12).text(`Fecha: ${new Date().toLocaleDateString()}`);
+                doc.text(`Cliente: ${remitoData.nombre || '-'}`);
+                doc.text(`Dirección: ${remitoData.direccion || '-'}`);
+                doc.text(`Email: ${remitoData.email || '-'}`);
+                doc.text(`Horario de Entrega: ${remitoData.horario || '-'}`);
+                doc.moveDown();
+                doc.text('----------------------------------------------------');
+                doc.moveDown();
+                
+                if (remitoData.productos && remitoData.productos.length > 0) {
+                    remitoData.productos.forEach(p => {
+                        doc.text(`- ${p.cantidad}x ${p.descripcion} ... ${p.subtotal}`);
+                    });
+                }
+                
+                doc.moveDown();
+                doc.text('----------------------------------------------------');
+                doc.fontSize(14).text(`TOTAL: ${remitoData.total || '$0'}`, { align: 'right' });
+                doc.end();
+
+            } catch(e) {
+                console.error("Error parseando el JSON del remito:", e);
+                // Si falla el parseo, mandamos el mensaje original sin PDF
+                sesion.historial.push({ role: "assistant", content: mensajeFinal });
+                sesion.lastBotResponse = mensajeFinal;
+                await client.sendMessage(chatID, mensajeFinal);
+            }
+        } else {
+            // Si no hay remito, comportamiento normal
+            sesion.historial.push({ role: "assistant", content: mensajeFinal });
+            sesion.lastBotResponse = mensajeFinal;
+            await client.sendMessage(chatID, mensajeFinal);
+            console.log(`🤖 Respondido a ${chatID}`);
+        }
 
     } catch (error) {
         console.error("Error AI:", error.message);
