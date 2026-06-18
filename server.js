@@ -38,6 +38,11 @@ client.on('ready', () => {
     console.log('🤖 El agente está leyendo el catálogo desde GitHub Pages y esperando mensajes...');
 });
 
+// Caché global del catálogo
+let cacheCatalogoReducido = '';
+let lastFetchTime = 0;
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutos
+
 client.on('message', async (message) => {
     if (message.from === 'status@broadcast' || message.from.includes('@g.us')) return;
 
@@ -52,29 +57,28 @@ client.on('message', async (message) => {
     sesion.historial.push({ role: "user", content: body });
 
     try {
-        // OBTENER CATÁLOGO EN TIEMPO REAL DESDE GITHUB PAGES
-        let catalogoActual = [];
-        try {
-            const res = await axios.get(CATALOGO_URL);
-            catalogoActual = res.data;
-        } catch(e) {
-            console.error("No se pudo obtener el catálogo de GitHub. ¿Estás seguro que subiste el catalogo.json al dashboard?");
-            // Continúa con catálogo vacío o maneja error
+        // OBTENER CATÁLOGO CON CACHÉ
+        if (Date.now() - lastFetchTime > CACHE_TTL || !cacheCatalogoReducido) {
+            try {
+                console.log("Descargando catálogo fresco desde GitHub...");
+                const res = await axios.get(CATALOGO_URL);
+                const catalogoActual = res.data;
+                
+                // Compresión a texto plano denso para ahorrar tokens y acelerar la IA
+                const lineasCatalogo = catalogoActual.map(p => {
+                    return `Cod:${p.codigo || '-'} | ${p.nombre} | ${p.presentacion || '-'} | May:$${p.precio_mayorista} | Min:$${p.precio_minorista} | Stock:${p.sin_stock ? 'NO' : 'SI'}`;
+                });
+                cacheCatalogoReducido = lineasCatalogo.join('\n');
+                lastFetchTime = Date.now();
+            } catch(e) {
+                console.error("Error obteniendo catálogo. Usando caché anterior si existe.");
+            }
         }
-
-        const catalogoReducido = catalogoActual.map(p => ({
-            codigo: p.codigo || "Sin cod",
-            nombre: p.nombre,
-            presentacion: p.presentacion,
-            precio_mayorista: p.precio_mayorista,
-            precio_minorista: p.precio_minorista,
-            sin_stock: p.sin_stock
-        }));
         
         const openaiMessages = [
             {
                 role: "system",
-                content: `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${JSON.stringify(catalogoReducido)}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`
+                content: `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`
             },
             ...sesion.historial
         ];
