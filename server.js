@@ -375,7 +375,16 @@ client.on('message_create', async (message) => {
 
     } catch (error) {
         console.error("Error AI:", error.message);
-        await client.sendMessage(chatID, "Disculpa, estoy experimentando problemas técnicos temporales.");
+        if (error.response && error.response.data) {
+            console.error(JSON.stringify(error.response.data, null, 2));
+        }
+        
+        let debugInfo = error.message;
+        if (error.response && error.response.data) {
+            debugInfo = JSON.stringify(error.response.data, null, 2);
+        }
+
+        await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales.\n\n*DEBUG INFO (Pasale esto a tu programador):*\n\`\`\`json\n${debugInfo}\n\`\`\``);
     }
 });
 
