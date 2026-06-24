@@ -357,11 +357,18 @@ ${JSON.stringify(sesion.carrito)}`;
                             
                             await page.close();
                             
-                            const base64Pdf = pdfBuffer.toString('base64');
+                            // Para evitar el error de atob() en whatsapp-web con archivos pesados,
+                            // guardamos el PDF en un archivo temporal y lo enviamos desde ahí.
                             const docName = remitoData.nombre ? `Remito_${remitoData.nombre.replace(/[^a-z0-9]/gi, '_')}.pdf` : 'Remito_AguaMarina.pdf';
-                            const media = new MessageMedia('application/pdf', base64Pdf, docName);
+                            const tempFilePath = path.join(__dirname, docName);
+                            fs.writeFileSync(tempFilePath, pdfBuffer);
+                            
+                            const media = MessageMedia.fromFilePath(tempFilePath);
                             
                             await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
+                            
+                            // Borrar archivo temporal después de enviarlo
+                            try { fs.unlinkSync(tempFilePath); } catch(e) {}
                         } catch(e) {
                             console.error("Error generando PDF HTML:", e);
                             await client.sendMessage(chatID, `*[DEBUG] Error en Puppeteer PDF:* ${e.message}`);
