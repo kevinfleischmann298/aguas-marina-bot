@@ -19,5 +19,8 @@ RUN npm install
 # Copiar el código fuente
 COPY . .
 
+# Exponer el puerto para la API del Dashboard
+EXPOSE 3000
+
 # Comando de inicio
 CMD ["node", "server.js"]
