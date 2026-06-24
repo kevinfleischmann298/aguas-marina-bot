@@ -319,8 +319,10 @@ ${JSON.stringify(sesion.carrito)}`;
                             // Inyectar datos en el DOM de la plantilla
                             await page.evaluate((data) => {
                                 if (document.getElementById('cliente')) document.getElementById('cliente').value = data.nombre || '';
+                                if (document.getElementById('cuit')) document.getElementById('cuit').value = data.cuit || '';
                                 if (document.getElementById('domicilio')) document.getElementById('domicilio').value = data.direccion || '';
-                                if (document.getElementById('localidad')) document.getElementById('localidad').value = 'Paraná';
+                                if (document.getElementById('localidad')) document.getElementById('localidad').value = data.localidad || 'Paraná';
+                                if (document.getElementById('pago')) document.getElementById('pago').value = data.pago || '';
                                 if (document.getElementById('fecha')) document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
                                 
                                 const tbody = document.getElementById('productosTable');
