@@ -298,8 +298,6 @@ ${JSON.stringify(sesion.carrito)}`;
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
             }
-            
-            await client.sendMessage(chatID, `*[DEBUG] Procesando ${remitoMatches.length} remito(s) en PDF...*`);
 
             for (const match of remitoMatches) {
                 if (match && match[1]) {
@@ -371,12 +369,10 @@ ${JSON.stringify(sesion.carrito)}`;
                             try { fs.unlinkSync(tempFilePath); } catch(e) {}
                         } catch(e) {
                             console.error("Error generando PDF HTML:", e);
-                            await client.sendMessage(chatID, `*[DEBUG] Error en Puppeteer PDF:* ${e.message}`);
                         }
 
                     } catch(e) {
                         console.error("Error parseando el JSON del remito:", e);
-                        await client.sendMessage(chatID, `*[DEBUG] Error de formato JSON:* La IA generó un JSON inválido.`);
                     }
                 }
             }
