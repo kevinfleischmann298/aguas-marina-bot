@@ -118,9 +118,9 @@ client.on('message_create', async (message) => {
 🕐 Entregas: Lunes a Sábados de 8 a 13hs.
 
 ¿En qué te puedo ayudar?`;
-        await client.sendMessage(chatID, bienvenida);
         sesion.lastBotResponse = bienvenida;
         guardarSesiones();
+        await client.sendMessage(chatID, bienvenida);
         console.log(`🌟 Bienvenida enviada a nuevo cliente ${chatID}`);
         return; // No procesar más, esperar su próximo mensaje
     }
