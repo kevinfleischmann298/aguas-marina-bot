@@ -185,17 +185,26 @@ client.on('message_create', async (message) => {
         let aiResponse = "";
         
         if (process.env.GEMINI_API_KEY) {
-            const response = await axios.post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
-                model: "gemini-2.5-flash",
-                messages: openaiMessages,
-                temperature: 0.3
-            }, {
-                headers: {
-                    "Authorization": `Bearer ${process.env.GEMINI_API_KEY}`,
-                    "Content-Type": "application/json"
+            const googleContents = sesion.historial.map(m => ({
+                role: m.role === "assistant" ? "model" : "user",
+                parts: [{ text: m.content }]
+            }));
+            
+            const systemPrompt = `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`;
+
+            const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+                contents: googleContents,
+                systemInstruction: {
+                    role: "system",
+                    parts: [{ text: systemPrompt }]
+                },
+                generationConfig: {
+                    temperature: 0.3
                 }
+            }, {
+                headers: { "Content-Type": "application/json" }
             });
-            aiResponse = response.data.choices[0].message.content;
+            aiResponse = response.data.candidates[0].content.parts[0].text;
         } else if (process.env.OPENROUTER_API_KEY) {
             const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
                 model: "google/gemini-2.5-flash",
