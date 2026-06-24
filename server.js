@@ -184,7 +184,19 @@ client.on('message_create', async (message) => {
 
         let aiResponse = "";
         
-        if (process.env.OPENROUTER_API_KEY) {
+        if (process.env.GEMINI_API_KEY) {
+            const response = await axios.post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+                model: "gemini-2.5-flash",
+                messages: openaiMessages,
+                temperature: 0.3
+            }, {
+                headers: {
+                    "Authorization": `Bearer ${process.env.GEMINI_API_KEY}`,
+                    "Content-Type": "application/json"
+                }
+            });
+            aiResponse = response.data.choices[0].message.content;
+        } else if (process.env.OPENROUTER_API_KEY) {
             const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
                 model: "google/gemini-2.5-flash",
                 messages: openaiMessages,
@@ -197,7 +209,7 @@ client.on('message_create', async (message) => {
             });
             aiResponse = response.data.choices[0].message.content;
         } else {
-            aiResponse = "⚠️ Faltan las credenciales de OpenRouter en Easypanel (Environment Variables).";
+            aiResponse = "⚠️ Faltan las credenciales de Gemini (Variable de entorno GEMINI_API_KEY en Easypanel).";
         }
 
         // INTERCEPTAR EL REMITO SI EXISTE
