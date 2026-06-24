@@ -12,7 +12,26 @@ console.log("Iniciando Bot de Aguas Marina para Easypanel...");
 // Link del JSON público que aloja GitHub Pages
 const CATALOGO_URL = 'https://kevinfleischmann298.github.io/aguas-marina-dashboard/catalogo.json';
 
-const sesiones = {};
+// --- SESIONES PERSISTENTES ---
+const SESIONES_FILE = path.join(__dirname, 'sesiones.json');
+let sesiones = {};
+try {
+    if (fs.existsSync(SESIONES_FILE)) {
+        sesiones = JSON.parse(fs.readFileSync(SESIONES_FILE, 'utf8'));
+        console.log(`💾 Sesiones cargadas: ${Object.keys(sesiones).length} chats recuperados.`);
+    }
+} catch(e) {
+    console.error('Error cargando sesiones:', e);
+}
+
+function guardarSesiones() {
+    try {
+        fs.writeFileSync(SESIONES_FILE, JSON.stringify(sesiones, null, 2));
+    } catch(e) {
+        console.error('Error guardando sesiones:', e);
+    }
+}
+
 let promptBase = '';
 try {
     promptBase = fs.readFileSync('./prompt_agente.txt', 'utf-8');
@@ -53,10 +72,13 @@ client.on('message_create', async (message) => {
     // Identificar el chat real (si es nuestro, usamos 'to', si es del cliente, usamos 'from')
     const chatID = message.fromMe ? message.to : message.from;
     const body = message.body;
-    if (!body || message.hasMedia) return;
+    if (!body) return;
+    // Permitir audios más adelante, por ahora solo texto
+    if (message.hasMedia && message.type !== 'chat') return;
 
     // Inicializar memoria del chat si no existe
-    if (!sesiones[chatID]) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
+    const esNuevo = !sesiones[chatID];
+    if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
     const sesion = sesiones[chatID];
 
     // Limitar historial a los últimos 20 mensajes para ahorrar tokens y evitar confusiones
@@ -87,7 +109,51 @@ client.on('message_create', async (message) => {
     if (!sesion.botActivo) return;
 
     console.log(`\nMensaje recibido de ${chatID}: ${body}`);
-    sesion.historial.push({ role: "user", content: body });
+
+    // --- MENSAJE DE BIENVENIDA PARA CLIENTES NUEVOS ---
+    if (esNuevo && !message.fromMe) {
+        const bienvenida = `¡Hola! 👋 Soy el asistente de *Agua Marina*.
+📦 Puedo ayudarte a armar tu pedido de productos de limpieza.
+💰 Decime qué necesitás y te paso precios al instante.
+🕐 Entregas: Lunes a Sábados de 8 a 13hs.
+
+¿En qué te puedo ayudar?`;
+        await client.sendMessage(chatID, bienvenida);
+        sesion.lastBotResponse = bienvenida;
+        guardarSesiones();
+        console.log(`🌟 Bienvenida enviada a nuevo cliente ${chatID}`);
+        return; // No procesar más, esperar su próximo mensaje
+    }
+
+    // --- COMANDO REPETIR ---
+    const bodyLower = body.trim().toLowerCase();
+    if (bodyLower === 'repetir' || bodyLower === 'mismo pedido' || bodyLower === 'lo de siempre' || bodyLower === 'lo mismo') {
+        try {
+            const pedidosFile = path.join(__dirname, 'pedidos.json');
+            if (fs.existsSync(pedidosFile)) {
+                const pedidos = JSON.parse(fs.readFileSync(pedidosFile, 'utf8'));
+                // Buscar el último pedido de este cliente
+                const ultimoPedido = [...pedidos].reverse().find(p => p.cliente_id === chatID || p.cliente_id?.includes(chatID.replace('@c.us', '')));
+                if (ultimoPedido) {
+                    const listaProductos = ultimoPedido.productos.map(p => `- ${p.cantidad}x ${p.nombre}: $${p.precio?.toLocaleString('es-AR')}`).join('\n');
+                    sesion.historial.push({ role: "user", content: `Quiero repetir mi último pedido. Los productos eran: ${JSON.stringify(ultimoPedido.productos)}. Total anterior: $${ultimoPedido.total}. Confirmámelo por favor.` });
+                    // Continuar con el flujo normal para que la IA confirme
+                } else {
+                    await client.sendMessage(chatID, 'No encontré pedidos anteriores tuyos. ¿Qué te gustaría pedir?');
+                    guardarSesiones();
+                    return;
+                }
+            } else {
+                await client.sendMessage(chatID, 'Todavía no tenés pedidos anteriores. ¿Qué te gustaría pedir?');
+                guardarSesiones();
+                return;
+            }
+        } catch(e) {
+            console.error('Error buscando pedido anterior:', e);
+        }
+    } else {
+        sesion.historial.push({ role: "user", content: body });
+    }
 
     try {
         // OBTENER CATÁLOGO CON CACHÉ
@@ -120,7 +186,7 @@ client.on('message_create', async (message) => {
         
         if (process.env.OPENROUTER_API_KEY) {
             const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-                model: "openai/gpt-4o-mini",
+                model: "google/gemini-2.5-flash",
                 messages: openaiMessages,
                 temperature: 0.3
             }, {
@@ -275,12 +341,14 @@ client.on('message_create', async (message) => {
 
             // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
             sesion.carrito = [];
+            guardarSesiones();
             console.log(`🧹 Carrito limpiado para ${chatID}. Listo para nuevo pedido.`);
         } else {
             // Si no hay remito, comportamiento normal
             sesion.historial.push({ role: "assistant", content: mensajeFinal });
             sesion.lastBotResponse = mensajeFinal;
             await client.sendMessage(chatID, mensajeFinal);
+            guardarSesiones();
             console.log(`🤖 Respondido a ${chatID}`);
         }
 
