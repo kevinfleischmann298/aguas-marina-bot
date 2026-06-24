@@ -5,6 +5,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const PDFDocument = require('pdfkit');
 const path = require('path');
+const express = require('express');
 
 console.log("Iniciando Bot de Aguas Marina para Easypanel...");
 
@@ -129,92 +130,133 @@ client.on('message_create', async (message) => {
         }
 
         // INTERCEPTAR EL REMITO SI EXISTE
-        let match = aiResponse.match(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/i);
+        let mensajeFinal = aiResponse;
+
+        // Función para extraer, guardar y limpiar otros JSONs
+        const extractAndSave = (tagOpen, tagClose, filename) => {
+            const regex = new RegExp(`\\[${tagOpen}\\]([\\s\\S]*?)\\[\\/${tagClose}\\]`, 'gi');
+            let matches = [...mensajeFinal.matchAll(regex)];
+            matches.forEach(matchData => {
+                if (matchData && matchData[1]) {
+                    try {
+                        const dataObj = JSON.parse(matchData[1].trim());
+                        mensajeFinal = mensajeFinal.replace(matchData[0], '').trim();
+                        // Guardar en archivo
+                        const filepath = path.join(__dirname, filename);
+                        let fileData = [];
+                        if (fs.existsSync(filepath)) {
+                            try { fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+                        }
+                        fileData.push(dataObj);
+                        fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2));
+                        console.log(`✅ Guardado ${tagOpen} en ${filename}`);
+                    } catch(e) {
+                        console.error(`Error parseando ${tagOpen}:`, e);
+                    }
+                }
+            });
+        };
+
+        extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
+        extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
+        extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
+
+        let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
         
         // Respaldo por si la IA usa bloques de código markdown
-        if (!match) {
-            match = aiResponse.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
+        if (remitoMatches.length === 0) {
+            let altMatch = mensajeFinal.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
+            if (altMatch) remitoMatches = [altMatch];
         }
         // Respaldo por si la IA solo escupe JSON crudo al final
-        if (!match) {
-            match = aiResponse.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
+        if (remitoMatches.length === 0) {
+            let altMatch = mensajeFinal.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
+            if (altMatch) remitoMatches = [altMatch];
         }
         
-        let mensajeFinal = aiResponse;
-        
-        if (match && match[1]) {
-            try {
-                const remitoData = JSON.parse(match[1].trim());
-                // Limpiar la etiqueta o el JSON del mensaje final
-                mensajeFinal = aiResponse.replace(match[0], '').trim();
-                
-                sesion.historial.push({ role: "assistant", content: mensajeFinal });
-                sesion.lastBotResponse = mensajeFinal;
-                await client.sendMessage(chatID, mensajeFinal);
-                
-                console.log(`🤖 Respondido a ${chatID} y generando PDF...`);
-                
-                // GENERAR Y ENVIAR PDF CON PUPPETEER (HTML TEMPLATE)
-                try {
-                    const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
-                    const browser = client.pupBrowser;
-                    if (!browser) throw new Error("Puppeteer browser no está disponible.");
-                    
-                    const page = await browser.newPage();
-                    await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
-                    
-                    // Inyectar datos en el DOM de la plantilla
-                    await page.evaluate((data) => {
-                        document.getElementById('cliente').value = data.nombre || '';
-                        document.getElementById('direccion').value = data.direccion || '';
-                        document.getElementById('localidad').value = 'Paraná';
-                        document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
-                        
-                        // Limpiar filas iniciales
-                        document.getElementById('rows').innerHTML = '';
-                        
-                        if (data.productos && data.productos.length > 0) {
-                            data.productos.forEach(p => {
-                                // Limpiar subtotal de símbolos y convertir a número (Ej: "$ 6.000,50" -> 6000.50)
-                                let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
-                                subStr = subStr.replace(',', '.');
-                                let sub = parseFloat(subStr) || 0;
-                                let cant = parseFloat(p.cantidad) || 1;
-                                let unit = sub / cant;
-                                
-                                window.addRow(p.descripcion, cant, unit);
-                            });
-                        } else {
-                            window.addRow('Detalle gestionado por WhatsApp', 1, 0);
-                        }
-                        
-                        window.recalc();
-                    }, remitoData);
-                    
-                    // Generar PDF estilo "Print"
-                    const pdfBuffer = await page.pdf({ 
-                        format: 'A4', 
-                        printBackground: true,
-                        margin: { top: 0, right: 0, bottom: 0, left: 0 }
-                    });
-                    
-                    await page.close();
-                    
-                    const base64Pdf = pdfBuffer.toString('base64');
-                    const media = new MessageMedia('application/pdf', base64Pdf, 'Remito_AguaMarina.pdf');
-                    
-                    await client.sendMessage(chatID, media, { caption: "📄 Aquí tienes el remito de tu pedido." });
-                    console.log(`✅ PDF HTML enviado a ${chatID}`);
-                } catch(e) {
-                    console.error("Error generando PDF HTML:", e);
+        if (remitoMatches.length > 0) {
+            // Eliminar todas las etiquetas JSON del mensaje final antes de enviar
+            for (const match of remitoMatches) {
+                if (match && match[0]) {
+                    mensajeFinal = mensajeFinal.replace(match[0], '').trim();
                 }
-
-            } catch(e) {
-                console.error("Error parseando el JSON del remito:", e);
-                // Si falla el parseo, mandamos el mensaje original sin PDF
+            }
+            
+            if (mensajeFinal) {
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
+                console.log(`🤖 Respondido a ${chatID} y generando ${remitoMatches.length} PDFs...`);
+            } else {
+                console.log(`🤖 Generando ${remitoMatches.length} PDFs...`);
+            }
+
+            for (const match of remitoMatches) {
+                if (match && match[1]) {
+                    try {
+                        const remitoData = JSON.parse(match[1].trim());
+                        
+                        // GENERAR Y ENVIAR PDF CON PUPPETEER (HTML TEMPLATE)
+                        try {
+                            const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
+                            const browser = client.pupBrowser;
+                            if (!browser) throw new Error("Puppeteer browser no está disponible.");
+                            
+                            const page = await browser.newPage();
+                            await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
+                            
+                            // Inyectar datos en el DOM de la plantilla
+                            await page.evaluate((data) => {
+                                document.getElementById('cliente').value = data.nombre || '';
+                                document.getElementById('direccion').value = data.direccion || '';
+                                document.getElementById('localidad').value = 'Paraná';
+                                document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
+                                
+                                // Limpiar filas iniciales
+                                document.getElementById('rows').innerHTML = '';
+                                
+                                if (data.productos && data.productos.length > 0) {
+                                    data.productos.forEach(p => {
+                                        // Limpiar subtotal de símbolos y convertir a número (Ej: "$ 6.000,50" -> 6000.50)
+                                        let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
+                                        subStr = subStr.replace(',', '.');
+                                        let sub = parseFloat(subStr) || 0;
+                                        let cant = parseFloat(p.cantidad) || 1;
+                                        let unit = sub / cant;
+                                        
+                                        window.addRow(p.descripcion, cant, unit);
+                                    });
+                                } else {
+                                    window.addRow('Detalle gestionado por WhatsApp', 1, 0);
+                                }
+                                
+                                window.recalc();
+                            }, remitoData);
+                    
+                            // Generar PDF estilo "Print"
+                            const pdfBuffer = await page.pdf({ 
+                                format: 'A4', 
+                                printBackground: true,
+                                margin: { top: 0, right: 0, bottom: 0, left: 0 }
+                            });
+                            
+                            await page.close();
+                            
+                            const base64Pdf = pdfBuffer.toString('base64');
+                            const docName = remitoData.nombre ? `Remito_${remitoData.nombre.replace(/[^a-z0-9]/gi, '_')}.pdf` : 'Remito_AguaMarina.pdf';
+                            const media = new MessageMedia('application/pdf', base64Pdf, docName);
+                            
+                            await client.sendMessage(chatID, media, { caption: `📄 Remito para: ${remitoData.nombre || remitoData.direccion || 'Pedido'}` });
+                            console.log(`✅ PDF HTML enviado a ${chatID}`);
+                        } catch(e) {
+                            console.error("Error generando PDF HTML:", e);
+                        }
+
+                    } catch(e) {
+                        console.error("Error parseando el JSON del remito:", e);
+                        // No mandamos el error al cliente por WhatsApp en el bucle
+                    }
+                }
             }
         } else {
             // Si no hay remito, comportamiento normal
@@ -231,3 +273,29 @@ client.on('message_create', async (message) => {
 });
 
 client.initialize();
+
+// --- EXPRESS API PARA DASHBOARD ---
+const app = express();
+
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    next();
+});
+
+const getJsonFile = (filename) => {
+    const filepath = path.join(__dirname, filename);
+    if (fs.existsSync(filepath)) {
+        try { return JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+    }
+    return [];
+};
+
+app.get('/api/pedidos', (req, res) => res.json(getJsonFile('pedidos.json')));
+app.get('/api/ratings', (req, res) => res.json(getJsonFile('ratings.json')));
+app.get('/api/clientes_calidad', (req, res) => res.json(getJsonFile('clientes_calidad.json')));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`🚀 API interna escuchando en el puerto ${PORT}`);
+});
