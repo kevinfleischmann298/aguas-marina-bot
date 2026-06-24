@@ -137,6 +137,13 @@ client.on('message_create', async (message) => {
         // INTERCEPTAR EL REMITO SI EXISTE
         let mensajeFinal = aiResponse;
 
+        // DEBUG: Ver qué devolvió la IA
+        console.log(`\n📝 RESPUESTA CRUDA DE LA IA (${chatID}):`);
+        console.log(aiResponse);
+        console.log(`\n🔍 ¿Contiene [REMITO_JSON]? ${aiResponse.includes('[REMITO_JSON]')}`);
+        console.log(`🔍 ¿Contiene [PEDIDO_DATA]? ${aiResponse.includes('[PEDIDO_DATA]')}`);
+        console.log(`🔍 ¿Contiene [RATING_DATA]? ${aiResponse.includes('[RATING_DATA]')}`);
+
         // Función para extraer, guardar y limpiar otros JSONs
         const extractAndSave = (tagOpen, tagClose, filename) => {
             const regex = new RegExp(`\\[${tagOpen}\\]([\\s\\S]*?)\\[\\/${tagClose}\\]`, 'gi');
@@ -179,6 +186,8 @@ client.on('message_create', async (message) => {
             if (altMatch) remitoMatches = [altMatch];
         }
         
+        console.log(`📊 Remitos encontrados: ${remitoMatches.length}`);
+
         if (remitoMatches.length > 0) {
             // Eliminar todas las etiquetas JSON del mensaje final antes de enviar
             for (const match of remitoMatches) {
