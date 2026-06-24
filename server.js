@@ -297,26 +297,23 @@ ${JSON.stringify(sesion.carrito)}`;
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
-                console.log(`🤖 Respondido a ${chatID} y generando ${remitoMatches.length} PDFs...`);
-            } else {
-                console.log(`🤖 Generando ${remitoMatches.length} PDFs...`);
             }
+            
+            await client.sendMessage(chatID, `*[DEBUG] Procesando ${remitoMatches.length} remito(s) en PDF...*`);
 
             for (const match of remitoMatches) {
                 if (match && match[1]) {
                     try {
                         const remitoData = JSON.parse(match[1].trim());
                         
-                        // GENERAR Y ENVIAR PDF CON PUPPETEER (HTML TEMPLATE)
                         try {
                             const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
                             const browser = client.pupBrowser;
-                            if (!browser) throw new Error("Puppeteer browser no está disponible.");
+                            if (!browser) throw new Error("Puppeteer browser no está disponible en whatsapp-web.js.");
                             
                             const page = await browser.newPage();
                             await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
                             
-                            // Inyectar datos en el DOM de la plantilla
                             await page.evaluate((data) => {
                                 if (document.getElementById('cliente')) document.getElementById('cliente').value = data.nombre || '';
                                 if (document.getElementById('cuit')) document.getElementById('cuit').value = data.cuit || '';
@@ -337,7 +334,6 @@ ${JSON.stringify(sesion.carrito)}`;
                                             let unit = sub / cant;
                                             
                                             const tr = document.createElement('tr');
-                                            // En la plantilla nueva no necesitamos el botón X para el PDF impreso
                                             tr.innerHTML = `
                                                 <td><input class="prod-input" value="${p.descripcion || p.nombre || ''}"></td>
                                                 <td class="num-cell"><input class="prod-input" type="number" value="${cant}"></td>
@@ -353,7 +349,6 @@ ${JSON.stringify(sesion.carrito)}`;
                                 if (typeof window.calcularTotal === 'function') window.calcularTotal();
                             }, remitoData);
                     
-                            // Generar PDF estilo "Print"
                             const pdfBuffer = await page.pdf({ 
                                 format: 'A4', 
                                 printBackground: true,
@@ -366,15 +361,15 @@ ${JSON.stringify(sesion.carrito)}`;
                             const docName = remitoData.nombre ? `Remito_${remitoData.nombre.replace(/[^a-z0-9]/gi, '_')}.pdf` : 'Remito_AguaMarina.pdf';
                             const media = new MessageMedia('application/pdf', base64Pdf, docName);
                             
-                            await client.sendMessage(chatID, media, { caption: `📄 Remito para: ${remitoData.nombre || remitoData.direccion || 'Pedido'}` });
-                            console.log(`✅ PDF HTML enviado a ${chatID}`);
+                            await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
                         } catch(e) {
                             console.error("Error generando PDF HTML:", e);
+                            await client.sendMessage(chatID, `*[DEBUG] Error en Puppeteer PDF:* ${e.message}`);
                         }
 
                     } catch(e) {
                         console.error("Error parseando el JSON del remito:", e);
-                        // No mandamos el error al cliente por WhatsApp en el bucle
+                        await client.sendMessage(chatID, `*[DEBUG] Error de formato JSON:* La IA generó un JSON inválido.`);
                     }
                 }
             }
