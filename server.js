@@ -190,7 +190,17 @@ client.on('message_create', async (message) => {
                 parts: [{ text: m.content }]
             }));
             
-            const systemPrompt = `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`;
+            const systemPrompt = `${promptBase}
+
+[IMPORTANTE - INFO DEL CLIENTE ACTUAL]
+El ID (número de teléfono) de este cliente es: "${chatID.replace('@c.us', '')}". 
+DEBES usar este número exacto en todos los campos "cliente_id" de los JSON. ¡NO uses el número del ejemplo!
+
+CATÁLOGO ACTUALIZADO EN VIVO:
+${cacheCatalogoReducido}
+
+CARRITO ACTUAL:
+${JSON.stringify(sesion.carrito)}`;
 
             const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
                 contents: googleContents,
@@ -308,30 +318,37 @@ client.on('message_create', async (message) => {
                             
                             // Inyectar datos en el DOM de la plantilla
                             await page.evaluate((data) => {
-                                document.getElementById('cliente').value = data.nombre || '';
-                                document.getElementById('direccion').value = data.direccion || '';
-                                document.getElementById('localidad').value = 'Paraná';
-                                document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
+                                if (document.getElementById('cliente')) document.getElementById('cliente').value = data.nombre || '';
+                                if (document.getElementById('domicilio')) document.getElementById('domicilio').value = data.direccion || '';
+                                if (document.getElementById('localidad')) document.getElementById('localidad').value = 'Paraná';
+                                if (document.getElementById('fecha')) document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
                                 
-                                // Limpiar filas iniciales
-                                document.getElementById('rows').innerHTML = '';
-                                
-                                if (data.productos && data.productos.length > 0) {
-                                    data.productos.forEach(p => {
-                                        // Limpiar subtotal de símbolos y convertir a número (Ej: "$ 6.000,50" -> 6000.50)
-                                        let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
-                                        subStr = subStr.replace(',', '.');
-                                        let sub = parseFloat(subStr) || 0;
-                                        let cant = parseFloat(p.cantidad) || 1;
-                                        let unit = sub / cant;
-                                        
-                                        window.addRow(p.descripcion, cant, unit);
-                                    });
-                                } else {
-                                    window.addRow('Detalle gestionado por WhatsApp', 1, 0);
+                                const tbody = document.getElementById('productosTable');
+                                if (tbody) {
+                                    tbody.innerHTML = '';
+                                    if (data.productos && data.productos.length > 0) {
+                                        data.productos.forEach(p => {
+                                            let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
+                                            subStr = subStr.replace(',', '.');
+                                            let sub = parseFloat(subStr) || 0;
+                                            let cant = parseFloat(p.cantidad) || 1;
+                                            let unit = sub / cant;
+                                            
+                                            const tr = document.createElement('tr');
+                                            // En la plantilla nueva no necesitamos el botón X para el PDF impreso
+                                            tr.innerHTML = `
+                                                <td><input class="prod-input" value="${p.descripcion || p.nombre || ''}"></td>
+                                                <td class="num-cell"><input class="prod-input" type="number" value="${cant}"></td>
+                                                <td class="num-cell"><input class="prod-input" type="number" value="${unit}"></td>
+                                                <td class="num-cell"><span class="subtotal">0,00</span></td>
+                                                <td></td>
+                                            `;
+                                            tbody.appendChild(tr);
+                                        });
+                                    }
                                 }
                                 
-                                window.recalc();
+                                if (typeof window.calcularTotal === 'function') window.calcularTotal();
                             }, remitoData);
                     
                             // Generar PDF estilo "Print"
