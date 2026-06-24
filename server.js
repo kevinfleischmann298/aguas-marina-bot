@@ -59,6 +59,11 @@ client.on('message_create', async (message) => {
     if (!sesiones[chatID]) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
     const sesion = sesiones[chatID];
 
+    // Limitar historial a los últimos 20 mensajes para ahorrar tokens y evitar confusiones
+    if (sesion.historial.length > 20) {
+        sesion.historial = sesion.historial.slice(-20);
+    }
+
     // --- LÓGICA DE MODO HUMANO ---
     if (message.fromMe) {
         const txt = body.trim().toLowerCase();
@@ -258,6 +263,10 @@ client.on('message_create', async (message) => {
                     }
                 }
             }
+
+            // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
+            sesion.carrito = [];
+            console.log(`🧹 Carrito limpiado para ${chatID}. Listo para nuevo pedido.`);
         } else {
             // Si no hay remito, comportamiento normal
             sesion.historial.push({ role: "assistant", content: mensajeFinal });
