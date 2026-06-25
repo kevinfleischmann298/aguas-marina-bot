@@ -85,6 +85,13 @@ client.on('message_create', async (message) => {
     // Inicializar memoria del chat si no existe
     const esNuevo = !sesiones[chatID];
     if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
+    
+    // Comando de prueba rápida
+    if (body.toLowerCase() === '!ping') {
+        await client.sendMessage(chatID, "pong");
+        return;
+    }
+    
     const sesion = sesiones[chatID];
 
     // Limitar historial a los últimos 20 mensajes para ahorrar tokens y evitar confusiones
@@ -414,6 +421,8 @@ ${JSON.stringify(sesion.carrito)}`;
                 // HARD RESET: La conversación terminó. Borramos la memoria de la IA para evitar bloqueos
                 sesion.historial = [];
                 sesion.carrito = [];
+                // Gémini REQUIERE que el historial empiece con 'user'. Metemos un mensaje fantasma.
+                sesion.historial.push({ role: "user", content: "[Sistema: El cliente finalizó un pedido anterior. Inicia una nueva conversación.]" });
                 mensajeFinal = "¡Muchas gracias por tu calificación! ¿En qué más te puedo ayudar hoy?";
             } else if (mensajeFinal === "") {
                 // Si la IA solo devolvió un JSON oculto y quedó vacío
@@ -436,16 +445,22 @@ ${JSON.stringify(sesion.carrito)}`;
 
     } catch (error) {
         console.error("Error AI:", error.message);
-        if (error.response && error.response.data) {
-            console.error(JSON.stringify(error.response.data, null, 2));
-        }
         
         let debugInfo = error.message;
         if (error.response && error.response.data) {
             debugInfo = JSON.stringify(error.response.data, null, 2);
         }
+        
+        // Truncar debugInfo si es muy largo para evitar que WhatsApp rechace el mensaje
+        if (debugInfo.length > 800) {
+            debugInfo = debugInfo.substring(0, 800) + "... [truncado]";
+        }
 
-        await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales.\n\n*DEBUG INFO (Pasale esto a tu programador):*\n\`\`\`json\n${debugInfo}\n\`\`\``);
+        try {
+            await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales.\n\n*DEBUG INFO:*\n\`\`\`json\n${debugInfo}\n\`\`\``);
+        } catch (sendError) {
+            console.error("Error crítico enviando mensaje de fallback:", sendError);
+        }
     }
 });
 
