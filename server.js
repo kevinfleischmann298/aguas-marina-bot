@@ -304,11 +304,14 @@ ${JSON.stringify(sesion.carrito)}`;
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
             }
+            
+            await client.sendMessage(chatID, `*[DEBUG] Interceptados ${remitoMatches.length} remitos para generar PDF...*`);
 
             for (const match of remitoMatches) {
                 if (match && match[1]) {
                     try {
                         const remitoData = JSON.parse(match[1].trim());
+                        await client.sendMessage(chatID, `*[DEBUG] JSON parseado con éxito para ${remitoData.nombre}. Generando PDF...*`);
                         
                         try {
                             const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
@@ -361,8 +364,6 @@ ${JSON.stringify(sesion.carrito)}`;
                             
                             await page.close();
                             
-                            // Para evitar el error de atob() en whatsapp-web con archivos pesados,
-                            // guardamos el PDF en un archivo temporal y lo enviamos desde ahí.
                             const docName = remitoData.nombre ? `Remito_${remitoData.nombre.replace(/[^a-z0-9]/gi, '_')}.pdf` : 'Remito_AguaMarina.pdf';
                             const tempFilePath = path.join(__dirname, docName);
                             fs.writeFileSync(tempFilePath, pdfBuffer);
@@ -371,14 +372,15 @@ ${JSON.stringify(sesion.carrito)}`;
                             
                             await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
                             
-                            // Borrar archivo temporal después de enviarlo
                             try { fs.unlinkSync(tempFilePath); } catch(e) {}
                         } catch(e) {
                             console.error("Error generando PDF HTML:", e);
+                            await client.sendMessage(chatID, `*[DEBUG] Error en Puppeteer PDF:* ${e.message}`);
                         }
 
                     } catch(e) {
                         console.error("Error parseando el JSON del remito:", e);
+                        await client.sendMessage(chatID, `*[DEBUG] Error de formato JSON:* La IA generó un JSON inválido. Error: ${e.message}. Texto: ${match[1]}`);
                     }
                 }
             }
