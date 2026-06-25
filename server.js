@@ -303,6 +303,9 @@ ${JSON.stringify(sesion.carrito)}`;
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
+            } else {
+                // Si la IA no escribió texto y solo mandó el JSON, ponemos un placeholder para no romper los roles de Gemini
+                sesion.historial.push({ role: "assistant", content: "[Remito generado y enviado al cliente en formato PDF]" });
             }
             
             await client.sendMessage(chatID, `*[DEBUG] Interceptados ${remitoMatches.length} remitos para generar PDF...*`);
