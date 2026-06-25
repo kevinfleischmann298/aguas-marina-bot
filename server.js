@@ -273,7 +273,14 @@ ${JSON.stringify(sesion.carrito)}`;
         };
 
         extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
-        extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
+        
+        let hardReset = false;
+        const ratingRegex = /\[RATING_DATA\]([\s\S]*?)\[\/RATING_DATA\]/gi;
+        if (ratingRegex.test(mensajeFinal)) {
+            extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
+            hardReset = true;
+        }
+        
         extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
 
         let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
@@ -403,8 +410,13 @@ ${JSON.stringify(sesion.carrito)}`;
             // Si no hay remito, comportamiento normal
             mensajeFinal = mensajeFinal.trim();
             
-            // Si la IA solo devolvió un JSON oculto y quedó vacío, ponemos un texto natural para que no se quede mudo
-            if (mensajeFinal === "") {
+            if (hardReset) {
+                // HARD RESET: La conversación terminó. Borramos la memoria de la IA para evitar bloqueos
+                sesion.historial = [];
+                sesion.carrito = [];
+                mensajeFinal = "¡Muchas gracias por tu calificación! ¿En qué más te puedo ayudar hoy?";
+            } else if (mensajeFinal === "") {
+                // Si la IA solo devolvió un JSON oculto y quedó vacío
                 mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
             }
             
