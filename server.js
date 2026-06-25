@@ -400,22 +400,20 @@ ${JSON.stringify(sesion.carrito)}`;
             // Si no hay remito, comportamiento normal
             mensajeFinal = mensajeFinal.trim();
             
-            // Si la IA solo devolvió un JSON oculto y quedó vacío, ponemos un texto de relleno para no romper la API
-            const textoParaHistorial = mensajeFinal === "" ? "[Sistema: Datos procesados internamente]" : mensajeFinal;
+            // Si la IA solo devolvió un JSON oculto y quedó vacío, ponemos un texto natural para que no se quede mudo
+            if (mensajeFinal === "") {
+                mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
+            }
             
-            sesion.historial.push({ role: "assistant", content: textoParaHistorial });
+            sesion.historial.push({ role: "assistant", content: mensajeFinal });
             
             // Limitar historial a los últimos 40 mensajes para no saturar a la IA
             if (sesion.historial.length > 40) {
                 sesion.historial = sesion.historial.slice(sesion.historial.length - 40);
             }
             
-            sesion.lastBotResponse = textoParaHistorial;
-            
-            // Solo enviamos mensaje a WhatsApp si realmente hay texto para mostrar
-            if (mensajeFinal !== "") {
-                await client.sendMessage(chatID, mensajeFinal);
-            }
+            sesion.lastBotResponse = mensajeFinal;
+            await client.sendMessage(chatID, mensajeFinal);
             
             guardarSesiones();
             console.log(`🤖 Respondido a ${chatID}`);
