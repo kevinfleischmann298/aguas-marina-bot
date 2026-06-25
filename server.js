@@ -387,11 +387,18 @@ ${JSON.stringify(sesion.carrito)}`;
 
             // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
             sesion.carrito = [];
+            sesion.historial.push({ role: "user", content: "[SISTEMA INTERNO: El remito del pedido anterior ya fue generado y enviado con éxito. El carrito está vacío. Si el cliente escribe de nuevo, trátalo como una nueva compra desde cero.]" });
             guardarSesiones();
             console.log(`🧹 Carrito limpiado para ${chatID}. Listo para nuevo pedido.`);
         } else {
             // Si no hay remito, comportamiento normal
             sesion.historial.push({ role: "assistant", content: mensajeFinal });
+            
+            // Limitar historial a los últimos 40 mensajes para no saturar a la IA
+            if (sesion.historial.length > 40) {
+                sesion.historial = sesion.historial.slice(sesion.historial.length - 40);
+            }
+            
             sesion.lastBotResponse = mensajeFinal;
             await client.sendMessage(chatID, mensajeFinal);
             guardarSesiones();
