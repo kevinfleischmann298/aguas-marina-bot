@@ -39,13 +39,19 @@ try {
     promptBase = "Eres el asistente virtual de Agua Marina.";
 }
 
+const puppeteerOptions = {
+    // Configuraciones CLAVES para correr dentro de Easypanel/Docker (Linux) sin entorno gráfico
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+};
+if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    puppeteerOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+} else if (process.platform === 'linux') {
+    puppeteerOptions.executablePath = '/usr/bin/google-chrome-stable';
+}
+
 const client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: {
-        // Configuraciones CLAVES para correr dentro de Easypanel/Docker (Linux) sin entorno gráfico
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable'
-    }
+    puppeteer: puppeteerOptions
 });
 
 client.on('qr', (qr) => {
