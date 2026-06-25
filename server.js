@@ -387,7 +387,13 @@ ${JSON.stringify(sesion.carrito)}`;
 
             // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
             sesion.carrito = [];
-            sesion.historial.push({ role: "user", content: "[SISTEMA INTERNO: El remito del pedido anterior ya fue generado y enviado con éxito. El carrito está vacío. Si el cliente escribe de nuevo, trátalo como una nueva compra desde cero.]" });
+            
+            // Inyectar el aviso de reseteo en el último mensaje del asistente para no romper la alternancia de roles
+            const lastMsg = sesion.historial[sesion.historial.length - 1];
+            if (lastMsg && lastMsg.role === "assistant") {
+                lastMsg.content += "\n\n[SISTEMA INTERNO: El remito del pedido anterior ya fue generado y enviado con éxito. El carrito está vacío. Si el cliente escribe de nuevo, trátalo como una nueva compra desde cero.]";
+            }
+            
             guardarSesiones();
             console.log(`🧹 Carrito limpiado para ${chatID}. Listo para nuevo pedido.`);
         } else {
