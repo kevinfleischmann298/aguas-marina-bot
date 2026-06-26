@@ -1,6 +1,7 @@
 FROM node:18-slim
 
-# Instalar dependencias necesarias para Puppeteer/Chromium en Linux
+# Solo necesitamos las fuentes para PDFKit (no necesitamos Chrome/Puppeteer para PDFs)
+# Chrome sigue siendo necesario SOLO para whatsapp-web.js (conexión a WhatsApp)
 RUN apt-get update \
     && apt-get install -y wget gnupg \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \

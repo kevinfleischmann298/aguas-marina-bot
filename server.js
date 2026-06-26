@@ -1,9 +1,20 @@
+// ============================================================
+// AGUA MARINA BOT v2.0 - Plan Maestro (Nivel Empresarial)
+// ============================================================
+// Upgrades incluidos:
+// 1. Rating Bypass (calificación sin IA)
+// 2. PDFKit nativo (sin Puppeteer/Chrome para PDFs)
+// 3. Soporte de Audios (transcripción con Gemini)
+// 4. Prompt mejorado
+// 5. Blindaje anti-crash total
+// ============================================================
+
 require('dotenv').config();
 const fs = require('fs');
 const axios = require('axios');
 const path = require('path');
 
-// Override console to write to file
+// --- SISTEMA DE LOGS EN ARCHIVO (Caja Negra) ---
 const logFile = fs.createWriteStream(path.join(__dirname, 'bot_logs.txt'), { flags: 'a' });
 const originalLog = console.log;
 const originalError = console.error;
@@ -20,10 +31,13 @@ console.error = function(...args) {
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const PDFDocument = require('pdfkit');
 const express = require('express');
+const { generarRemitoPDF } = require('./generar_pdf');
 
-console.log("Iniciando Bot de Aguas Marina para Easypanel...");
+console.log("🚀 Iniciando Agua Marina Bot v2.0 (Plan Maestro)...");
+
+// --- VARIABLES DE INICIO (para !status) ---
+const BOT_START_TIME = Date.now();
 
 // Link del JSON público que aloja GitHub Pages
 const CATALOGO_URL = 'https://kevinfleischmann298.github.io/aguas-marina-dashboard/catalogo.json';
@@ -55,8 +69,8 @@ try {
     promptBase = "Eres el asistente virtual de Agua Marina.";
 }
 
+// --- CONFIGURACIÓN DE WHATSAPP-WEB.JS ---
 const puppeteerOptions = {
-    // Configuraciones CLAVES para correr dentro de Easypanel/Docker (Linux) sin entorno gráfico
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
 };
 if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -71,15 +85,26 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
-    console.log('\n\n======================================================');
+    console.log('\n======================================================');
     console.log('📱 ESCANEA ESTE CÓDIGO QR EN LA APP DE WHATSAPP:');
     console.log('======================================================\n');
     qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
-    console.log('\n✅ ¡WHATSAPP VINCULADO CON ÉXITO EN EASYPANEL!');
-    console.log('🤖 El agente está leyendo el catálogo desde GitHub Pages y esperando mensajes...');
+    console.log('\n✅ ¡WHATSAPP VINCULADO CON ÉXITO!');
+    console.log('🤖 Agua Marina Bot v2.0 operativo.');
+});
+
+// --- UPGRADE 5: RECONEXIÓN AUTOMÁTICA ---
+client.on('disconnected', (reason) => {
+    console.error(`⚠️ WhatsApp desconectado: ${reason}. Reintentando en 30 segundos...`);
+    setTimeout(() => {
+        console.log('🔄 Intentando reconexión...');
+        client.initialize().catch(err => {
+            console.error('Error reconectando:', err);
+        });
+    }, 30000);
 });
 
 // Caché global del catálogo
@@ -87,179 +112,258 @@ let cacheCatalogoReducido = '';
 let lastFetchTime = 0;
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutos
 
+// ============================================================
+// HANDLER PRINCIPAL DE MENSAJES
+// ============================================================
 client.on('message_create', async (message) => {
-    // Evitar estados y grupos
-    if (message.from === 'status@broadcast' || message.from.includes('@g.us') || message.to.includes('@g.us')) return;
+    // --- UPGRADE 5: TRY/CATCH GLOBAL ---
+    try {
+        // Evitar estados y grupos
+        if (message.from === 'status@broadcast' || message.from.includes('@g.us') || message.to.includes('@g.us')) return;
 
-    // Identificar el chat real (si es nuestro, usamos 'to', si es del cliente, usamos 'from')
-    const chatID = message.fromMe ? message.to : message.from;
-    const body = message.body;
-    if (!body) return;
-    // Permitir audios más adelante, por ahora solo texto
-    if (message.hasMedia && message.type !== 'chat') return;
+        const chatID = message.fromMe ? message.to : message.from;
+        const body = message.body || '';
+        
+        // --- UPGRADE 3: SOPORTE DE AUDIOS ---
+        // Ya no ignoramos los mensajes con media. Los audios se procesan abajo.
+        const esAudio = message.hasMedia && (message.type === 'ptt' || message.type === 'audio');
+        
+        // Si tiene media pero NO es audio ni texto, ignorar (imágenes, stickers, etc.)
+        if (message.hasMedia && !esAudio && message.type !== 'chat') return;
+        
+        // Si no hay body y no es audio, ignorar
+        if (!body && !esAudio) return;
 
-    // Inicializar memoria del chat si no existe
-    const esNuevo = !sesiones[chatID];
-    if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '', esperandoCalificacion: false };
-    
-    // Comando de prueba rápida
-    if (body.toLowerCase() === '!ping') {
-        await client.sendMessage(chatID, "pong");
-        return;
-    }
-    
-    // Comando para enviar logs
-    if (body.toLowerCase() === '!logs') {
-        try {
-            const logsText = fs.readFileSync(path.join(__dirname, 'bot_logs.txt'), 'utf8');
-            const lastLogs = logsText.substring(logsText.length - 3000); // Send last 3000 chars
-            await client.sendMessage(chatID, `*Últimos logs del bot:*\n\`\`\`\n${lastLogs}\n\`\`\``);
-        } catch(e) {
-            await client.sendMessage(chatID, "Error leyendo logs.");
+        // Inicializar memoria del chat si no existe
+        const esNuevo = !sesiones[chatID];
+        if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '', esperandoCalificacion: false };
+
+        // ========================
+        // COMANDOS ESPECIALES
+        // ========================
+        
+        if (body.toLowerCase() === '!ping') {
+            await client.sendMessage(chatID, "pong 🏓");
+            return;
         }
-        return;
-    }
-    
-    const sesion = sesiones[chatID];
 
-    // INTERCEPTAR CALIFICACIÓN MANUALMENTE (Bypass de IA)
-    if (sesion.esperandoCalificacion) {
-        console.log(`[RATING BYPASS] Procesando calificación manual para ${chatID}: ${body}`);
-        const ratingMatch = body.match(/\d/);
-        let ratingVal = ratingMatch ? parseInt(ratingMatch[0]) : 5; // Default a 5 si responde sin número
-        
-        const dataObj = { 
-            cliente_id: chatID, 
-            rating: ratingVal, 
-            comentario: body,
-            fecha: new Date().toISOString() 
-        };
-        const filepath = path.join(__dirname, 'ratings.json');
-        let fileData = [];
-        try { if (fs.existsSync(filepath)) fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
-        fileData.push(dataObj);
-        try { fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2)); } catch(e) {}
-        
-        // Resetear TODO de forma segura y natural
-        sesion.historial = [];
-        sesion.carrito = [];
-        sesion.esperandoCalificacion = false;
-        guardarSesiones();
-        
-        await client.sendMessage(chatID, "¡Muchas gracias por tu calificación! El sistema se ha reiniciado correctamente. ¿En qué más te puedo ayudar hoy?");
-        return; // ¡Salimos aquí para NO llamar a la IA de Gemini!
-    }
-
-    // Limitar historial a los últimos 20 mensajes para ahorrar tokens y evitar confusiones
-    if (sesion.historial.length > 20) {
-        sesion.historial = sesion.historial.slice(-20);
-    }
-
-    // --- LÓGICA DE MODO HUMANO ---
-    if (message.fromMe) {
-        const txt = body.trim().toLowerCase();
-        if (txt === '!bot off') {
-            sesion.botActivo = false;
-            console.log(`🔴 Bot apagado manualmente para ${chatID}`);
-        } else if (txt === '!bot on') {
-            sesion.botActivo = true;
-            console.log(`🟢 Bot reactivado para ${chatID}`);
-        } else if (body !== sesion.lastBotResponse) {
-            // Si mandamos un mensaje nosotros (el humano) y no es el que acaba de mandar el bot...
-            if (sesion.botActivo) {
-                sesion.botActivo = false;
-                console.log(`🔴 Auto-pausa activada: El humano intervino en la conversación con ${chatID}`);
+        if (body.toLowerCase() === '!logs') {
+            try {
+                const logsText = fs.readFileSync(path.join(__dirname, 'bot_logs.txt'), 'utf8');
+                const lastLogs = logsText.substring(logsText.length - 3000);
+                await client.sendMessage(chatID, `*Últimos logs del bot:*\n\`\`\`\n${lastLogs}\n\`\`\``);
+            } catch(e) {
+                await client.sendMessage(chatID, "Error leyendo logs.");
             }
+            return;
         }
-        return; // Salir de la función (no procesar mensajes que enviamos nosotros)
-    }
 
-    // Si el bot está apagado para este cliente, ignorar todo
-    if (!sesion.botActivo) return;
+        // --- UPGRADE 5: COMANDO !STATUS ---
+        if (body.toLowerCase() === '!status') {
+            const uptimeMs = Date.now() - BOT_START_TIME;
+            const uptimeMin = Math.floor(uptimeMs / 60000);
+            const uptimeHrs = Math.floor(uptimeMin / 60);
+            const memUsage = process.memoryUsage();
+            const ramMB = (memUsage.rss / 1024 / 1024).toFixed(1);
+            const heapMB = (memUsage.heapUsed / 1024 / 1024).toFixed(1);
+            const sesionesActivas = Object.keys(sesiones).length;
 
-    console.log(`\nMensaje recibido de ${chatID}: ${body}`);
+            await client.sendMessage(chatID, 
+                `📊 *Estado del Bot Agua Marina v2.0*\n\n` +
+                `⏱️ Uptime: ${uptimeHrs}h ${uptimeMin % 60}m\n` +
+                `💾 RAM usada: ${ramMB} MB\n` +
+                `🧠 Heap: ${heapMB} MB\n` +
+                `👥 Sesiones activas: ${sesionesActivas}\n` +
+                `📦 Motor PDF: PDFKit (nativo)\n` +
+                `🤖 IA: Gemini 2.5 Flash\n` +
+                `🎙️ Audios: Habilitados`
+            );
+            return;
+        }
 
-    // --- MENSAJE DE BIENVENIDA PARA CLIENTES NUEVOS ---
-    if (esNuevo && !message.fromMe) {
-        const bienvenida = `¡Hola! 👋 Soy el asistente de *Agua Marina*.
+        const sesion = sesiones[chatID];
+
+        // ========================
+        // UPGRADE 1: RATING BYPASS
+        // ========================
+        if (sesion.esperandoCalificacion) {
+            console.log(`[RATING BYPASS] Procesando calificación manual para ${chatID}: ${body}`);
+            const ratingMatch = body.match(/\d/);
+            let ratingVal = ratingMatch ? parseInt(ratingMatch[0]) : 5;
+
+            const dataObj = {
+                cliente_id: chatID,
+                rating: ratingVal,
+                comentario: body,
+                fecha: new Date().toISOString()
+            };
+            const filepath = path.join(__dirname, 'ratings.json');
+            let fileData = [];
+            try { if (fs.existsSync(filepath)) fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+            fileData.push(dataObj);
+            try { fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2)); } catch(e) {}
+
+            // Resetear TODO
+            sesion.historial = [];
+            sesion.carrito = [];
+            sesion.esperandoCalificacion = false;
+            guardarSesiones();
+
+            await client.sendMessage(chatID, "¡Muchas gracias por tu calificación! 🌟 ¿En qué más te puedo ayudar hoy?");
+            return;
+        }
+
+        // Limitar historial a los últimos 20 mensajes
+        if (sesion.historial.length > 20) {
+            sesion.historial = sesion.historial.slice(-20);
+        }
+
+        // --- LÓGICA DE MODO HUMANO ---
+        if (message.fromMe) {
+            const txt = body.trim().toLowerCase();
+            if (txt === '!bot off') {
+                sesion.botActivo = false;
+                console.log(`🔴 Bot apagado manualmente para ${chatID}`);
+            } else if (txt === '!bot on') {
+                sesion.botActivo = true;
+                console.log(`🟢 Bot reactivado para ${chatID}`);
+            } else if (body !== sesion.lastBotResponse) {
+                if (sesion.botActivo) {
+                    sesion.botActivo = false;
+                    console.log(`🔴 Auto-pausa activada: El humano intervino en la conversación con ${chatID}`);
+                }
+            }
+            return;
+        }
+
+        if (!sesion.botActivo) return;
+
+        console.log(`\nMensaje recibido de ${chatID}: ${esAudio ? '[AUDIO]' : body}`);
+
+        // --- BIENVENIDA PARA CLIENTES NUEVOS ---
+        if (esNuevo && !message.fromMe) {
+            const bienvenida = `¡Hola! 👋 Soy el asistente de *Agua Marina*.
 📦 Puedo ayudarte a armar tu pedido de productos de limpieza.
 💰 Decime qué necesitás y te paso precios al instante.
+🎙️ También podés mandarme un audio con tu pedido.
 🕐 Entregas: Lunes a Sábados de 8 a 13hs.
 
 ¿En qué te puedo ayudar?`;
-        sesion.lastBotResponse = bienvenida;
-        guardarSesiones();
-        await client.sendMessage(chatID, bienvenida);
-        console.log(`🌟 Bienvenida enviada a nuevo cliente ${chatID}`);
-        return; // No procesar más, esperar su próximo mensaje
-    }
+            sesion.lastBotResponse = bienvenida;
+            guardarSesiones();
+            await client.sendMessage(chatID, bienvenida);
+            console.log(`🌟 Bienvenida enviada a nuevo cliente ${chatID}`);
+            return;
+        }
 
-    // --- COMANDO REPETIR ---
-    const bodyLower = body.trim().toLowerCase();
-    if (bodyLower === 'repetir' || bodyLower === 'mismo pedido' || bodyLower === 'lo de siempre' || bodyLower === 'lo mismo') {
-        try {
-            const pedidosFile = path.join(__dirname, 'pedidos.json');
-            if (fs.existsSync(pedidosFile)) {
-                const pedidos = JSON.parse(fs.readFileSync(pedidosFile, 'utf8'));
-                // Buscar el último pedido de este cliente
-                const ultimoPedido = [...pedidos].reverse().find(p => p.cliente_id === chatID || p.cliente_id?.includes(chatID.replace('@c.us', '')));
-                if (ultimoPedido) {
-                    const listaProductos = ultimoPedido.productos.map(p => `- ${p.cantidad}x ${p.nombre}: $${p.precio?.toLocaleString('es-AR')}`).join('\n');
-                    sesion.historial.push({ role: "user", content: `Quiero repetir mi último pedido. Los productos eran: ${JSON.stringify(ultimoPedido.productos)}. Total anterior: $${ultimoPedido.total}. Confirmámelo por favor.` });
-                    // Continuar con el flujo normal para que la IA confirme
+        // ========================
+        // UPGRADE 3: TRANSCRIPCIÓN DE AUDIO
+        // ========================
+        let textoParaIA = body;
+        
+        if (esAudio) {
+            try {
+                console.log(`🎙️ Descargando audio de ${chatID}...`);
+                const media = await message.downloadMedia();
+                
+                if (media && media.data) {
+                    console.log(`🎙️ Audio descargado. Mimetype: ${media.mimetype}, Size: ${Math.round(media.data.length * 0.75 / 1024)}KB. Enviando a Gemini...`);
+                    
+                    // Enviar audio directamente a Gemini para transcripción
+                    const transcriptionResponse = await axios.post(
+                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+                        {
+                            contents: [{
+                                role: "user",
+                                parts: [
+                                    {
+                                        inlineData: {
+                                            mimeType: media.mimetype || 'audio/ogg',
+                                            data: media.data
+                                        }
+                                    },
+                                    {
+                                        text: "Transcribí este audio de voz de un cliente de una distribuidora de productos de limpieza. Devolvé SOLAMENTE el texto transcripto, sin comentarios ni explicaciones. Si no se entiende algo, poné [inaudible]."
+                                    }
+                                ]
+                            }]
+                        },
+                        { headers: { "Content-Type": "application/json" }, timeout: 30000 }
+                    );
+                    
+                    textoParaIA = transcriptionResponse.data.candidates[0].content.parts[0].text;
+                    console.log(`🎙️ Transcripción exitosa: "${textoParaIA}"`);
+                    
+                    // Notificar al cliente que entendimos su audio
+                    await client.sendMessage(chatID, `🎙️ _Entendido:_ "${textoParaIA}"\n\n_Procesando tu pedido..._`);
                 } else {
-                    await client.sendMessage(chatID, 'No encontré pedidos anteriores tuyos. ¿Qué te gustaría pedir?');
+                    await client.sendMessage(chatID, "No pude descargar el audio. ¿Podrías escribirme el pedido por texto?");
+                    return;
+                }
+            } catch (audioError) {
+                console.error("Error transcribiendo audio:", audioError.message);
+                await client.sendMessage(chatID, "No pude procesar el audio en este momento. ¿Podrías escribirme el pedido por texto? 🙏");
+                return;
+            }
+        }
+
+        // --- COMANDO REPETIR ---
+        const bodyLower = textoParaIA.trim().toLowerCase();
+        if (bodyLower === 'repetir' || bodyLower === 'mismo pedido' || bodyLower === 'lo de siempre' || bodyLower === 'lo mismo') {
+            try {
+                const pedidosFile = path.join(__dirname, 'pedidos.json');
+                if (fs.existsSync(pedidosFile)) {
+                    const pedidos = JSON.parse(fs.readFileSync(pedidosFile, 'utf8'));
+                    const ultimoPedido = [...pedidos].reverse().find(p => p.cliente_id === chatID || p.cliente_id?.includes(chatID.replace('@c.us', '')));
+                    if (ultimoPedido) {
+                        sesion.historial.push({ role: "user", content: `Quiero repetir mi último pedido. Los productos eran: ${JSON.stringify(ultimoPedido.productos)}. Total anterior: $${ultimoPedido.total}. Confirmámelo por favor.` });
+                    } else {
+                        await client.sendMessage(chatID, 'No encontré pedidos anteriores tuyos. ¿Qué te gustaría pedir?');
+                        guardarSesiones();
+                        return;
+                    }
+                } else {
+                    await client.sendMessage(chatID, 'Todavía no tenés pedidos anteriores. ¿Qué te gustaría pedir?');
                     guardarSesiones();
                     return;
                 }
-            } else {
-                await client.sendMessage(chatID, 'Todavía no tenés pedidos anteriores. ¿Qué te gustaría pedir?');
-                guardarSesiones();
-                return;
-            }
-        } catch(e) {
-            console.error('Error buscando pedido anterior:', e);
-        }
-    } else {
-        sesion.historial.push({ role: "user", content: body });
-    }
-
-    try {
-        // OBTENER CATÁLOGO CON CACHÉ
-        if (Date.now() - lastFetchTime > CACHE_TTL || !cacheCatalogoReducido) {
-            try {
-                console.log("Descargando catálogo fresco desde GitHub...");
-                const res = await axios.get(CATALOGO_URL);
-                const catalogoActual = res.data;
-                
-                // Compresión a texto plano denso para ahorrar tokens y acelerar la IA
-                const lineasCatalogo = catalogoActual.map(p => {
-                    return `Cod:${p.codigo || '-'} | ${p.nombre} | ${p.presentacion || '-'} | May:$${p.precio_mayorista} | Min:$${p.precio_minorista} | Stock:${p.sin_stock ? 'NO' : 'SI'}`;
-                });
-                cacheCatalogoReducido = lineasCatalogo.join('\n');
-                lastFetchTime = Date.now();
             } catch(e) {
-                console.error("Error obteniendo catálogo. Usando caché anterior si existe.");
+                console.error('Error buscando pedido anterior:', e);
             }
+        } else {
+            sesion.historial.push({ role: "user", content: textoParaIA });
         }
-        
-        const openaiMessages = [
-            {
-                role: "system",
-                content: `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`
-            },
-            ...sesion.historial
-        ];
 
-        let aiResponse = "";
-        
-        if (process.env.GEMINI_API_KEY) {
-            const googleContents = sesion.historial.map(m => ({
-                role: m.role === "assistant" ? "model" : "user",
-                parts: [{ text: m.content }]
-            }));
-            
-            const systemPrompt = `${promptBase}
+        // ========================
+        // LLAMADA A LA IA
+        // ========================
+        try {
+            // OBTENER CATÁLOGO CON CACHÉ
+            if (Date.now() - lastFetchTime > CACHE_TTL || !cacheCatalogoReducido) {
+                try {
+                    console.log("Descargando catálogo fresco desde GitHub...");
+                    const res = await axios.get(CATALOGO_URL);
+                    const catalogoActual = res.data;
+
+                    const lineasCatalogo = catalogoActual.map(p => {
+                        return `Cod:${p.codigo || '-'} | ${p.nombre} | ${p.presentacion || '-'} | May:$${p.precio_mayorista} | Min:$${p.precio_minorista} | Stock:${p.sin_stock ? 'NO' : 'SI'}`;
+                    });
+                    cacheCatalogoReducido = lineasCatalogo.join('\n');
+                    lastFetchTime = Date.now();
+                } catch(e) {
+                    console.error("Error obteniendo catálogo. Usando caché anterior si existe.");
+                }
+            }
+
+            let aiResponse = "";
+
+            if (process.env.GEMINI_API_KEY) {
+                const googleContents = sesion.historial.map(m => ({
+                    role: m.role === "assistant" ? "model" : "user",
+                    parts: [{ text: m.content }]
+                }));
+
+                const systemPrompt = `${promptBase}
 
 [IMPORTANTE - INFO DEL CLIENTE ACTUAL]
 El ID (número de teléfono) de este cliente es: "${chatID.replace('@c.us', '')}". 
@@ -271,238 +375,199 @@ ${cacheCatalogoReducido}
 CARRITO ACTUAL:
 ${JSON.stringify(sesion.carrito)}`;
 
-            const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
-                contents: googleContents,
-                systemInstruction: {
-                    role: "system",
-                    parts: [{ text: systemPrompt }]
-                },
-                generationConfig: {
+                const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+                    contents: googleContents,
+                    systemInstruction: {
+                        role: "system",
+                        parts: [{ text: systemPrompt }]
+                    },
+                    generationConfig: {
+                        temperature: 0.3
+                    }
+                }, {
+                    headers: { "Content-Type": "application/json" },
+                    timeout: 60000
+                });
+                aiResponse = response.data.candidates[0].content.parts[0].text;
+            } else if (process.env.OPENROUTER_API_KEY) {
+                const openaiMessages = [
+                    {
+                        role: "system",
+                        content: `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`
+                    },
+                    ...sesion.historial
+                ];
+                const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
+                    model: "google/gemini-2.5-flash",
+                    messages: openaiMessages,
                     temperature: 0.3
-                }
-            }, {
-                headers: { "Content-Type": "application/json" }
-            });
-            aiResponse = response.data.candidates[0].content.parts[0].text;
-        } else if (process.env.OPENROUTER_API_KEY) {
-            const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-                model: "google/gemini-2.5-flash",
-                messages: openaiMessages,
-                temperature: 0.3
-            }, {
-                headers: {
-                    "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                    "Content-Type": "application/json"
-                }
-            });
-            aiResponse = response.data.choices[0].message.content;
-        } else {
-            aiResponse = "⚠️ Faltan las credenciales de Gemini (Variable de entorno GEMINI_API_KEY en Easypanel).";
-        }
+                }, {
+                    headers: {
+                        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                        "Content-Type": "application/json"
+                    },
+                    timeout: 60000
+                });
+                aiResponse = response.data.choices[0].message.content;
+            } else {
+                aiResponse = "⚠️ Faltan las credenciales de Gemini (Variable de entorno GEMINI_API_KEY en Easypanel).";
+            }
 
-        // INTERCEPTAR EL REMITO SI EXISTE
-        let mensajeFinal = aiResponse;
+            // ========================
+            // PROCESAMIENTO DE RESPUESTA
+            // ========================
+            let mensajeFinal = aiResponse;
 
-        // DEBUG: Ver qué devolvió la IA
-        console.log(`\n📝 RESPUESTA CRUDA DE LA IA (${chatID}):`);
-        console.log(aiResponse);
-        console.log(`\n🔍 ¿Contiene [REMITO_JSON]? ${aiResponse.includes('[REMITO_JSON]')}`);
-        console.log(`🔍 ¿Contiene [PEDIDO_DATA]? ${aiResponse.includes('[PEDIDO_DATA]')}`);
-        console.log(`🔍 ¿Contiene [RATING_DATA]? ${aiResponse.includes('[RATING_DATA]')}`);
+            console.log(`\n📝 RESPUESTA DE LA IA (${chatID}):`);
+            console.log(aiResponse.substring(0, 500));
 
-        // Función para extraer, guardar y limpiar otros JSONs
-        const extractAndSave = (tagOpen, tagClose, filename) => {
-            const regex = new RegExp(`\\[${tagOpen}\\]([\\s\\S]*?)\\[\\/${tagClose}\\]`, 'gi');
-            let matches = [...mensajeFinal.matchAll(regex)];
-            matches.forEach(matchData => {
-                if (matchData && matchData[1]) {
-                    try {
-                        const dataObj = JSON.parse(matchData[1].trim());
-                        mensajeFinal = mensajeFinal.replace(matchData[0], '').trim();
-                        // Guardar en archivo
-                        const filepath = path.join(__dirname, filename);
-                        let fileData = [];
-                        if (fs.existsSync(filepath)) {
-                            try { fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+            // Función para extraer, guardar y limpiar JSONs ocultos
+            const extractAndSave = (tagOpen, tagClose, filename) => {
+                const regex = new RegExp(`\\[${tagOpen}\\]([\\s\\S]*?)\\[\\/${tagClose}\\]`, 'gi');
+                let matches = [...mensajeFinal.matchAll(regex)];
+                matches.forEach(matchData => {
+                    if (matchData && matchData[1]) {
+                        try {
+                            const dataObj = JSON.parse(matchData[1].trim());
+                            mensajeFinal = mensajeFinal.replace(matchData[0], '').trim();
+                            const filepath = path.join(__dirname, filename);
+                            let fileData = [];
+                            if (fs.existsSync(filepath)) {
+                                try { fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+                            }
+                            fileData.push(dataObj);
+                            fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2));
+                            console.log(`✅ Guardado ${tagOpen} en ${filename}`);
+                        } catch(e) {
+                            console.error(`Error parseando ${tagOpen}:`, e);
                         }
-                        fileData.push(dataObj);
-                        fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2));
-                        console.log(`✅ Guardado ${tagOpen} en ${filename}`);
-                    } catch(e) {
-                        console.error(`Error parseando ${tagOpen}:`, e);
+                    }
+                });
+            };
+
+            extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
+            extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
+            extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
+
+            // ========================
+            // DETECCIÓN Y GENERACIÓN DE REMITOS PDF
+            // ========================
+            let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
+
+            // Respaldo: bloques de código markdown
+            if (remitoMatches.length === 0) {
+                let altMatch = mensajeFinal.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
+                if (altMatch) remitoMatches = [altMatch];
+            }
+            // Respaldo: JSON crudo al final
+            if (remitoMatches.length === 0) {
+                let altMatch = mensajeFinal.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
+                if (altMatch) remitoMatches = [altMatch];
+            }
+
+            console.log(`📊 Remitos encontrados: ${remitoMatches.length}`);
+
+            if (remitoMatches.length > 0) {
+                // Eliminar etiquetas JSON del mensaje visible
+                for (const match of remitoMatches) {
+                    if (match && match[0]) {
+                        mensajeFinal = mensajeFinal.replace(match[0], '').trim();
                     }
                 }
-            });
-        };
 
-        extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
-        extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
-
-        let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
-        
-        // Respaldo por si la IA usa bloques de código markdown
-        if (remitoMatches.length === 0) {
-            let altMatch = mensajeFinal.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
-            if (altMatch) remitoMatches = [altMatch];
-        }
-        // Respaldo por si la IA solo escupe JSON crudo al final
-        if (remitoMatches.length === 0) {
-            let altMatch = mensajeFinal.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
-            if (altMatch) remitoMatches = [altMatch];
-        }
-        
-        console.log(`📊 Remitos encontrados: ${remitoMatches.length}`);
-
-        if (remitoMatches.length > 0) {
-            // Eliminar todas las etiquetas JSON del mensaje final antes de enviar
-            for (const match of remitoMatches) {
-                if (match && match[0]) {
-                    mensajeFinal = mensajeFinal.replace(match[0], '').trim();
+                if (mensajeFinal) {
+                    sesion.historial.push({ role: "assistant", content: mensajeFinal });
+                    sesion.lastBotResponse = mensajeFinal;
+                    await client.sendMessage(chatID, mensajeFinal);
+                } else {
+                    sesion.historial.push({ role: "assistant", content: "[Remito generado y enviado al cliente en formato PDF]" });
                 }
-            }
-            
-            if (mensajeFinal) {
+
+                // Generar PDFs con PDFKit (UPGRADE 2)
+                for (const match of remitoMatches) {
+                    if (match && match[1]) {
+                        try {
+                            const remitoData = JSON.parse(match[1].trim());
+                            console.log(`📄 Generando PDF con PDFKit para ${remitoData.nombre}...`);
+
+                            const pdfPath = await generarRemitoPDF(remitoData);
+                            const media = MessageMedia.fromFilePath(pdfPath);
+                            await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
+
+                            // Limpiar archivo temporal
+                            try { fs.unlinkSync(pdfPath); } catch(e) {}
+                            console.log(`✅ PDF enviado exitosamente para ${remitoData.nombre}`);
+
+                        } catch(e) {
+                            console.error("Error generando PDF:", e);
+                            await client.sendMessage(chatID, `⚠️ Hubo un error generando el PDF. Tu pedido está confirmado de todas formas. Error: ${e.message}`);
+                        }
+                    }
+                }
+
+                // Limpiar carrito y activar Rating Bypass
+                sesion.carrito = [];
+                sesion.esperandoCalificacion = true;
+                guardarSesiones();
+                console.log(`🧹 Carrito limpiado para ${chatID}. Modo espera de calificación activado.`);
+
+            } else {
+                // Sin remito: comportamiento normal
+                mensajeFinal = mensajeFinal.trim();
+
+                if (mensajeFinal === "") {
+                    mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
+                }
+
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
+
+                if (sesion.historial.length > 40) {
+                    sesion.historial = sesion.historial.slice(sesion.historial.length - 40);
+                }
+
                 sesion.lastBotResponse = mensajeFinal;
                 await client.sendMessage(chatID, mensajeFinal);
-            } else {
-                // Si la IA no escribió texto y solo mandó el JSON, ponemos un placeholder para no romper los roles de Gemini
-                sesion.historial.push({ role: "assistant", content: "[Remito generado y enviado al cliente en formato PDF]" });
-            }
-            
-            await client.sendMessage(chatID, `*[DEBUG] Interceptados ${remitoMatches.length} remitos para generar PDF...*`);
-
-            for (const match of remitoMatches) {
-                if (match && match[1]) {
-                    try {
-                        const remitoData = JSON.parse(match[1].trim());
-                        await client.sendMessage(chatID, `*[DEBUG] JSON parseado con éxito para ${remitoData.nombre}. Generando PDF...*`);
-                        
-                        try {
-                            const htmlTemplate = fs.readFileSync(path.join(__dirname, 'plantilla.html'), 'utf8');
-                            const browser = client.pupBrowser;
-                            if (!browser) throw new Error("Puppeteer browser no está disponible en whatsapp-web.js.");
-                            
-                            const page = await browser.newPage();
-                            await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
-                            
-                            await page.evaluate((data) => {
-                                if (document.getElementById('cliente')) document.getElementById('cliente').value = data.nombre || '';
-                                if (document.getElementById('cuit')) document.getElementById('cuit').value = data.cuit || '';
-                                if (document.getElementById('domicilio')) document.getElementById('domicilio').value = data.direccion || '';
-                                if (document.getElementById('localidad')) document.getElementById('localidad').value = data.localidad || 'Paraná';
-                                if (document.getElementById('pago')) document.getElementById('pago').value = data.pago || '';
-                                if (document.getElementById('fecha')) document.getElementById('fecha').value = new Date().toLocaleDateString('es-AR');
-                                
-                                const tbody = document.getElementById('productosTable');
-                                if (tbody) {
-                                    tbody.innerHTML = '';
-                                    if (data.productos && data.productos.length > 0) {
-                                        data.productos.forEach(p => {
-                                            let subStr = String(p.subtotal).replace(/[^0-9,-]+/g, '');
-                                            subStr = subStr.replace(',', '.');
-                                            let sub = parseFloat(subStr) || 0;
-                                            let cant = parseFloat(p.cantidad) || 1;
-                                            let unit = sub / cant;
-                                            
-                                            const tr = document.createElement('tr');
-                                            tr.innerHTML = `
-                                                <td><input class="prod-input" value="${p.descripcion || p.nombre || ''}"></td>
-                                                <td class="num-cell"><input class="prod-input" type="number" value="${cant}"></td>
-                                                <td class="num-cell"><input class="prod-input" type="number" value="${unit}"></td>
-                                                <td class="num-cell"><span class="subtotal">0,00</span></td>
-                                                <td></td>
-                                            `;
-                                            tbody.appendChild(tr);
-                                        });
-                                    }
-                                }
-                                
-                                if (typeof window.calcularTotal === 'function') window.calcularTotal();
-                            }, remitoData);
-                    
-                            const pdfBuffer = await page.pdf({ 
-                                format: 'A4', 
-                                printBackground: true,
-                                margin: { top: 0, right: 0, bottom: 0, left: 0 }
-                            });
-                            
-                            await page.close();
-                            
-                            const docName = remitoData.nombre ? `Remito_${remitoData.nombre.replace(/[^a-z0-9]/gi, '_')}.pdf` : 'Remito_AguaMarina.pdf';
-                            const tempFilePath = path.join(__dirname, docName);
-                            fs.writeFileSync(tempFilePath, pdfBuffer);
-                            
-                            const media = MessageMedia.fromFilePath(tempFilePath);
-                            
-                            await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
-                            
-                            try { fs.unlinkSync(tempFilePath); } catch(e) {}
-                        } catch(e) {
-                            console.error("Error generando PDF HTML:", e);
-                            await client.sendMessage(chatID, `*[DEBUG] Error en Puppeteer PDF:* ${e.message}`);
-                        }
-
-                    } catch(e) {
-                        console.error("Error parseando el JSON del remito:", e);
-                        await client.sendMessage(chatID, `*[DEBUG] Error de formato JSON:* La IA generó un JSON inválido. Error: ${e.message}. Texto: ${match[1]}`);
-                    }
-                }
+                guardarSesiones();
+                console.log(`🤖 Respondido a ${chatID}`);
             }
 
-            // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
-            sesion.carrito = [];
-            sesion.esperandoCalificacion = true; // Activar el Bypass de IA para el próximo mensaje del cliente
-            
-            guardarSesiones();
-            console.log(`🧹 Carrito limpiado para ${chatID}. Activado modo espera de calificación.`);
-        } else {
-            // Si no hay remito, comportamiento normal
-            mensajeFinal = mensajeFinal.trim();
-            
-            if (mensajeFinal === "") {
-                // Si la IA solo devolvió un JSON oculto y quedó vacío
-                mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
+        } catch (aiError) {
+            console.error("Error en llamada a IA:", aiError.message);
+
+            let debugInfo = aiError.message;
+            if (aiError.response && aiError.response.data) {
+                debugInfo = JSON.stringify(aiError.response.data, null, 2);
             }
-            
-            sesion.historial.push({ role: "assistant", content: mensajeFinal });
-            
-            // Limitar historial a los últimos 40 mensajes para no saturar a la IA
-            if (sesion.historial.length > 40) {
-                sesion.historial = sesion.historial.slice(sesion.historial.length - 40);
+            if (debugInfo.length > 800) {
+                debugInfo = debugInfo.substring(0, 800) + "... [truncado]";
             }
-            
-            sesion.lastBotResponse = mensajeFinal;
-            await client.sendMessage(chatID, mensajeFinal);
-            
-            guardarSesiones();
-            console.log(`🤖 Respondido a ${chatID}`);
+
+            try {
+                await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales. ¿Podrías intentar de nuevo en unos segundos?\n\n*DEBUG:*\n\`\`\`\n${debugInfo}\n\`\`\``);
+            } catch (sendError) {
+                console.error("Error crítico enviando fallback:", sendError);
+            }
         }
 
-    } catch (error) {
-        console.error("Error AI:", error.message);
-        
-        let debugInfo = error.message;
-        if (error.response && error.response.data) {
-            debugInfo = JSON.stringify(error.response.data, null, 2);
-        }
-        
-        // Truncar debugInfo si es muy largo para evitar que WhatsApp rechace el mensaje
-        if (debugInfo.length > 800) {
-            debugInfo = debugInfo.substring(0, 800) + "... [truncado]";
-        }
-
+    } catch (globalError) {
+        // UPGRADE 5: CATCH GLOBAL - El bot NUNCA se cuelga
+        console.error("💀 ERROR GLOBAL CAPTURADO:", globalError);
         try {
-            await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales.\n\n*DEBUG INFO:*\n\`\`\`json\n${debugInfo}\n\`\`\``);
-        } catch (sendError) {
-            console.error("Error crítico enviando mensaje de fallback:", sendError);
+            const chatID = message.fromMe ? message.to : message.from;
+            if (chatID) {
+                await client.sendMessage(chatID, "Disculpa, tuve un error inesperado. ¿Podrías repetir tu mensaje? 🙏");
+            }
+        } catch(e) {
+            console.error("Error en catch global al intentar notificar:", e);
         }
     }
 });
 
 client.initialize();
 
-// --- EXPRESS API PARA DASHBOARD ---
+// ============================================================
+// EXPRESS API PARA DASHBOARD
+// ============================================================
 const app = express();
 
 app.use((req, res, next) => {
@@ -522,6 +587,19 @@ const getJsonFile = (filename) => {
 app.get('/api/pedidos', (req, res) => res.json(getJsonFile('pedidos.json')));
 app.get('/api/ratings', (req, res) => res.json(getJsonFile('ratings.json')));
 app.get('/api/clientes_calidad', (req, res) => res.json(getJsonFile('clientes_calidad.json')));
+
+// Endpoint de health check
+app.get('/api/status', (req, res) => {
+    const uptimeMs = Date.now() - BOT_START_TIME;
+    const memUsage = process.memoryUsage();
+    res.json({
+        status: 'online',
+        version: '2.0',
+        uptime_minutes: Math.floor(uptimeMs / 60000),
+        ram_mb: (memUsage.rss / 1024 / 1024).toFixed(1),
+        sesiones_activas: Object.keys(sesiones).length
+    });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
