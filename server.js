@@ -100,7 +100,7 @@ client.on('message_create', async (message) => {
 
     // Inicializar memoria del chat si no existe
     const esNuevo = !sesiones[chatID];
-    if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '' };
+    if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '', esperandoCalificacion: false };
     
     // Comando de prueba rápida
     if (body.toLowerCase() === '!ping') {
@@ -121,6 +121,34 @@ client.on('message_create', async (message) => {
     }
     
     const sesion = sesiones[chatID];
+
+    // INTERCEPTAR CALIFICACIÓN MANUALMENTE (Bypass de IA)
+    if (sesion.esperandoCalificacion) {
+        console.log(`[RATING BYPASS] Procesando calificación manual para ${chatID}: ${body}`);
+        const ratingMatch = body.match(/\d/);
+        let ratingVal = ratingMatch ? parseInt(ratingMatch[0]) : 5; // Default a 5 si responde sin número
+        
+        const dataObj = { 
+            cliente_id: chatID, 
+            rating: ratingVal, 
+            comentario: body,
+            fecha: new Date().toISOString() 
+        };
+        const filepath = path.join(__dirname, 'ratings.json');
+        let fileData = [];
+        try { if (fs.existsSync(filepath)) fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+        fileData.push(dataObj);
+        try { fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2)); } catch(e) {}
+        
+        // Resetear TODO de forma segura y natural
+        sesion.historial = [];
+        sesion.carrito = [];
+        sesion.esperandoCalificacion = false;
+        guardarSesiones();
+        
+        await client.sendMessage(chatID, "¡Muchas gracias por tu calificación! El sistema se ha reiniciado correctamente. ¿En qué más te puedo ayudar hoy?");
+        return; // ¡Salimos aquí para NO llamar a la IA de Gemini!
+    }
 
     // Limitar historial a los últimos 20 mensajes para ahorrar tokens y evitar confusiones
     if (sesion.historial.length > 20) {
@@ -308,14 +336,6 @@ ${JSON.stringify(sesion.carrito)}`;
         };
 
         extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
-        
-        let hardReset = false;
-        const ratingRegex = /\[RATING_DATA\]([\s\S]*?)\[\/RATING_DATA\]/gi;
-        if (ratingRegex.test(mensajeFinal)) {
-            extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
-            hardReset = true;
-        }
-        
         extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
 
         let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
@@ -432,27 +452,15 @@ ${JSON.stringify(sesion.carrito)}`;
 
             // LIMPIAR CARRITO después de emitir los remitos para que el cliente pueda hacer un pedido nuevo
             sesion.carrito = [];
-            
-            // Inyectar el aviso de reseteo en el último mensaje del asistente para no romper la alternancia de roles
-            const lastMsg = sesion.historial[sesion.historial.length - 1];
-            if (lastMsg && lastMsg.role === "assistant") {
-                lastMsg.content += "\n\n[SISTEMA INTERNO: El remito del pedido anterior ya fue generado y enviado con éxito. El carrito está vacío. Si el cliente escribe de nuevo, trátalo como una nueva compra desde cero.]";
-            }
+            sesion.esperandoCalificacion = true; // Activar el Bypass de IA para el próximo mensaje del cliente
             
             guardarSesiones();
-            console.log(`🧹 Carrito limpiado para ${chatID}. Listo para nuevo pedido.`);
+            console.log(`🧹 Carrito limpiado para ${chatID}. Activado modo espera de calificación.`);
         } else {
             // Si no hay remito, comportamiento normal
             mensajeFinal = mensajeFinal.trim();
             
-            if (hardReset) {
-                // HARD RESET: La conversación terminó. Borramos la memoria de la IA para evitar bloqueos
-                sesion.historial = [];
-                sesion.carrito = [];
-                // Gémini REQUIERE que el historial empiece con 'user'. Metemos un mensaje fantasma.
-                sesion.historial.push({ role: "user", content: "[Sistema: El cliente finalizó un pedido anterior. Inicia una nueva conversación.]" });
-                mensajeFinal = "¡Muchas gracias por tu calificación! ¿En qué más te puedo ayudar hoy?";
-            } else if (mensajeFinal === "") {
+            if (mensajeFinal === "") {
                 // Si la IA solo devolvió un JSON oculto y quedó vacío
                 mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
             }
