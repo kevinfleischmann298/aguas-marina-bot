@@ -1,10 +1,26 @@
 require('dotenv').config();
 const fs = require('fs');
 const axios = require('axios');
+const path = require('path');
+
+// Override console to write to file
+const logFile = fs.createWriteStream(path.join(__dirname, 'bot_logs.txt'), { flags: 'a' });
+const originalLog = console.log;
+const originalError = console.error;
+console.log = function(...args) {
+    const msg = `[LOG] ${new Date().toISOString()} - ${args.join(' ')}\n`;
+    logFile.write(msg);
+    originalLog.apply(console, args);
+};
+console.error = function(...args) {
+    const msg = `[ERR] ${new Date().toISOString()} - ${args.join(' ')}\n`;
+    logFile.write(msg);
+    originalError.apply(console, args);
+};
+
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const PDFDocument = require('pdfkit');
-const path = require('path');
 const express = require('express');
 
 console.log("Iniciando Bot de Aguas Marina para Easypanel...");
@@ -89,6 +105,18 @@ client.on('message_create', async (message) => {
     // Comando de prueba rápida
     if (body.toLowerCase() === '!ping') {
         await client.sendMessage(chatID, "pong");
+        return;
+    }
+    
+    // Comando para enviar logs
+    if (body.toLowerCase() === '!logs') {
+        try {
+            const logsText = fs.readFileSync(path.join(__dirname, 'bot_logs.txt'), 'utf8');
+            const lastLogs = logsText.substring(logsText.length - 3000); // Send last 3000 chars
+            await client.sendMessage(chatID, `*Últimos logs del bot:*\n\`\`\`\n${lastLogs}\n\`\`\``);
+        } catch(e) {
+            await client.sendMessage(chatID, "Error leyendo logs.");
+        }
         return;
     }
     
