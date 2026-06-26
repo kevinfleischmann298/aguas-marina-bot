@@ -534,7 +534,7 @@ ${JSON.stringify(sesion.carrito)}`;
 
                             // 🖼️ PRIMERO: Enviar Vista Rápida (Imagen/Ticket)
                             try {
-                                const imgPath = await generarRemitoImagen(remitoData);
+                                const imgPath = await generarRemitoImagen(remitoData, GEMINI_KEY);
                                 const imgMedia = MessageMedia.fromFilePath(imgPath);
                                 await client.sendMessage(chatID, imgMedia, { caption: '🖼️ Vista rápida del remito' });
                                 try { fs.unlinkSync(imgPath); } catch(e) {}
