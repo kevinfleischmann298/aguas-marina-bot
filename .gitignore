@@ -1,0 +1,9 @@
+node_modules/
+.env
+bot_logs.txt
+.wwebjs_auth/
+*.json
+!package.json
+!package-lock.json
+*.pdf
+*.png
