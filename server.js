@@ -561,7 +561,19 @@ ${JSON.stringify(sesion.carrito)}`;
             console.error("Error en catch global al intentar notificar:", e);
         }
     }
-});
+// --- FIX CHROME LOCK (Evita crashear al hacer Deploy en Easypanel) ---
+const authDir = path.join(__dirname, '.wwebjs_auth');
+if (fs.existsSync(authDir)) {
+    const lockFiles = [
+        path.join(authDir, 'session', 'SingletonLock'),
+        path.join(authDir, 'session', 'SingletonCookie'),
+        path.join(authDir, 'session', 'Default', 'SingletonLock'),
+        path.join(authDir, 'session', 'Default', 'SingletonCookie')
+    ];
+    lockFiles.forEach(file => {
+        try { if (fs.existsSync(file)) fs.unlinkSync(file); console.log('🧹 Archivo Lock de Chrome eliminado:', file); } catch(e) {}
+    });
+}
 
 client.initialize();
 
