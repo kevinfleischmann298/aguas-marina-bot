@@ -1,12 +1,9 @@
 // ============================================================
-// AGUA MARINA BOT v2.0 - Plan Maestro (Nivel Empresarial)
+//  🌊 AGUA MARINA — BOT ENTERPRISE SWARM v3.0
 // ============================================================
-// Upgrades incluidos:
-// 1. Rating Bypass (calificación sin IA)
-// 2. PDFKit nativo (sin Puppeteer/Chrome para PDFs)
-// 3. Soporte de Audios (transcripción con Gemini)
-// 4. Prompt mejorado
-// 5. Blindaje anti-crash total
+//  El bot de WhatsApp más avanzado del mercado argentino.
+//  4 Cerebros de IA | Enjambre Multi-Agente | Ciberseguridad
+//  RAG Vectorial | Function Calling | Generación Dual PDF+IMG
 // ============================================================
 
 require('dotenv').config();
@@ -29,17 +26,27 @@ console.error = function(...args) {
     originalError.apply(console, args);
 };
 
+// --- MÓDULOS DEL MONSTRUO ---
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const { generarRemitoPDF } = require('./generar_pdf');
+const { generarRemitoImagen } = require('./generar_imagen');
+const { checkRateLimit } = require('./rate_limiter');
+const { sanitizeInput, validateRemito } = require('./sanitizer');
+const { agenteOidos, agenteOjos, agenteRecepcionista, agenteVendedor } = require('./swarm_router');
+const supabase = require('./supabase_client');
 
-console.log("🚀 Iniciando Agua Marina Bot v2.0 (Plan Maestro)...");
+console.log("🌊 Iniciando Agua Marina Bot Enterprise Swarm v3.0...");
+console.log(`📦 Módulos cargados: PDFKit, Imagen, RateLimiter, Sanitizer, Swarm(4 IAs), Supabase`);
 
-// --- VARIABLES DE INICIO (para !status) ---
+// --- VARIABLES DE INICIO ---
 const BOT_START_TIME = Date.now();
+const BOT_VERSION = '3.0 Enterprise Swarm';
 
-// Link del JSON público que aloja GitHub Pages
+// --- CREDENCIALES ---
+const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '';
 const CATALOGO_URL = 'https://kevinfleischmann298.github.io/aguas-marina-dashboard/catalogo.json';
 
 // --- SESIONES PERSISTENTES ---
@@ -59,6 +66,21 @@ function guardarSesiones() {
         fs.writeFileSync(SESIONES_FILE, JSON.stringify(sesiones, null, 2));
     } catch(e) {
         console.error('Error guardando sesiones:', e);
+    }
+}
+
+// --- GUARDAR EN JSON LOCAL (Fallback si no hay Supabase) ---
+function guardarEnJSON(filename, dataObj) {
+    try {
+        const filepath = path.join(__dirname, filename);
+        let fileData = [];
+        if (fs.existsSync(filepath)) {
+            try { fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+        }
+        fileData.push(dataObj);
+        fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2));
+    } catch(e) {
+        console.error(`Error guardando en ${filename}:`, e);
     }
 }
 
@@ -93,10 +115,13 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     console.log('\n✅ ¡WHATSAPP VINCULADO CON ÉXITO!');
-    console.log('🤖 Agua Marina Bot v2.0 operativo.');
+    console.log(`🌊 Agua Marina Bot ${BOT_VERSION} — OPERATIVO`);
+    console.log(`🧠 Enjambre: Oídos(Gemini) + Ojos(Gemini) + Recepcionista(Llama3) + Vendedor(Claude/Gemini)`);
+    console.log(`🛡️ Ciberseguridad: RateLimiter + Sanitizer + Validador de Remitos`);
+    console.log(`🗄️ Base de datos: ${supabase.isConfigured() ? 'Supabase (PostgreSQL)' : 'JSON local (fallback)'}`);
 });
 
-// --- UPGRADE 5: RECONEXIÓN AUTOMÁTICA ---
+// --- RECONEXIÓN AUTOMÁTICA ---
 client.on('disconnected', (reason) => {
     console.error(`⚠️ WhatsApp desconectado: ${reason}. Reintentando en 30 segundos...`);
     setTimeout(() => {
@@ -107,43 +132,56 @@ client.on('disconnected', (reason) => {
     }, 30000);
 });
 
-// Caché global del catálogo
+// --- CACHÉ DEL CATÁLOGO ---
 let cacheCatalogoReducido = '';
 let lastFetchTime = 0;
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutos
+const CACHE_TTL = 30 * 60 * 1000;
 
 // ============================================================
-// HANDLER PRINCIPAL DE MENSAJES
+//  🧠 HANDLER PRINCIPAL — ENJAMBRE MULTI-AGENTE
 // ============================================================
 client.on('message_create', async (message) => {
-    // --- UPGRADE 5: TRY/CATCH GLOBAL ---
     try {
-        // Evitar estados y grupos
+        // --- Filtros básicos ---
         if (message.from === 'status@broadcast' || message.from.includes('@g.us') || message.to.includes('@g.us')) return;
 
         const chatID = message.fromMe ? message.to : message.from;
         const body = message.body || '';
-        
-        // --- UPGRADE 3: SOPORTE DE AUDIOS ---
-        // Ya no ignoramos los mensajes con media. Los audios se procesan abajo.
+
+        // --- Detectar tipo de media ---
         const esAudio = message.hasMedia && (message.type === 'ptt' || message.type === 'audio');
-        
-        // Si tiene media pero NO es audio ni texto, ignorar (imágenes, stickers, etc.)
-        if (message.hasMedia && !esAudio && message.type !== 'chat') return;
-        
-        // Si no hay body y no es audio, ignorar
-        if (!body && !esAudio) return;
+        const esImagen = message.hasMedia && (message.type === 'image' || message.type === 'sticker');
 
-        // Inicializar memoria del chat si no existe
+        // Si tiene media pero no es audio ni imagen ni texto, ignorar
+        if (message.hasMedia && !esAudio && !esImagen && message.type !== 'chat') return;
+        if (!body && !esAudio && !esImagen) return;
+
+        // --- Inicializar sesión ---
         const esNuevo = !sesiones[chatID];
-        if (esNuevo) sesiones[chatID] = { carrito: [], historial: [], botActivo: true, lastBotResponse: '', esperandoCalificacion: false };
+        if (esNuevo) {
+            sesiones[chatID] = {
+                carrito: [],
+                historial: [],
+                botActivo: true,
+                lastBotResponse: '',
+                esperandoCalificacion: false
+            };
+        }
 
         // ========================
-        // COMANDOS ESPECIALES
+        // 🛡️ CIBERSEGURIDAD: RATE LIMITING
         // ========================
-        
+        const rateCheck = checkRateLimit(chatID);
+        if (!rateCheck.allowed) {
+            console.log(`🚫 [RATE LIMIT] Mensaje bloqueado de ${chatID}: ${rateCheck.reason}`);
+            return; // Ignorar silenciosamente
+        }
+
+        // ========================
+        // ⚡ COMANDOS ESPECIALES
+        // ========================
         if (body.toLowerCase() === '!ping') {
-            await client.sendMessage(chatID, "pong 🏓");
+            await client.sendMessage(chatID, "pong 🏓 (Enterprise Swarm v3.0)");
             return;
         }
 
@@ -151,14 +189,13 @@ client.on('message_create', async (message) => {
             try {
                 const logsText = fs.readFileSync(path.join(__dirname, 'bot_logs.txt'), 'utf8');
                 const lastLogs = logsText.substring(logsText.length - 3000);
-                await client.sendMessage(chatID, `*Últimos logs del bot:*\n\`\`\`\n${lastLogs}\n\`\`\``);
+                await client.sendMessage(chatID, `*Últimos logs:*\n\`\`\`\n${lastLogs}\n\`\`\``);
             } catch(e) {
                 await client.sendMessage(chatID, "Error leyendo logs.");
             }
             return;
         }
 
-        // --- UPGRADE 5: COMANDO !STATUS ---
         if (body.toLowerCase() === '!status') {
             const uptimeMs = Date.now() - BOT_START_TIME;
             const uptimeMin = Math.floor(uptimeMs / 60000);
@@ -166,17 +203,20 @@ client.on('message_create', async (message) => {
             const memUsage = process.memoryUsage();
             const ramMB = (memUsage.rss / 1024 / 1024).toFixed(1);
             const heapMB = (memUsage.heapUsed / 1024 / 1024).toFixed(1);
-            const sesionesActivas = Object.keys(sesiones).length;
 
-            await client.sendMessage(chatID, 
-                `📊 *Estado del Bot Agua Marina v2.0*\n\n` +
+            await client.sendMessage(chatID,
+                `📊 *Estado — Agua Marina ${BOT_VERSION}*\n\n` +
                 `⏱️ Uptime: ${uptimeHrs}h ${uptimeMin % 60}m\n` +
-                `💾 RAM usada: ${ramMB} MB\n` +
-                `🧠 Heap: ${heapMB} MB\n` +
-                `👥 Sesiones activas: ${sesionesActivas}\n` +
-                `📦 Motor PDF: PDFKit (nativo)\n` +
-                `🤖 IA: Gemini 2.5 Flash\n` +
-                `🎙️ Audios: Habilitados`
+                `💾 RAM: ${ramMB} MB | Heap: ${heapMB} MB\n` +
+                `👥 Sesiones: ${Object.keys(sesiones).length}\n` +
+                `🧠 Enjambre: 4 Agentes IA\n` +
+                `  🎙️ Oídos: Gemini Flash\n` +
+                `  👁️ Ojos: Gemini Flash\n` +
+                `  🚪 Recepcionista: ${OPENROUTER_KEY ? 'Llama 3' : 'Gemini (fallback)'}\n` +
+                `  💼 Vendedor: ${OPENROUTER_KEY ? 'Claude 3.5 Sonnet' : 'Gemini (fallback)'}\n` +
+                `🗄️ DB: ${supabase.isConfigured() ? 'Supabase' : 'JSON local'}\n` +
+                `🛡️ Seguridad: RateLimiter + Sanitizer\n` +
+                `📄 PDF: PDFKit | 🖼️ Vista: Imagen`
             );
             return;
         }
@@ -184,10 +224,10 @@ client.on('message_create', async (message) => {
         const sesion = sesiones[chatID];
 
         // ========================
-        // UPGRADE 1: RATING BYPASS
+        // ⭐ RATING BYPASS (Sistema Híbrido)
         // ========================
         if (sesion.esperandoCalificacion) {
-            console.log(`[RATING BYPASS] Procesando calificación manual para ${chatID}: ${body}`);
+            console.log(`[RATING BYPASS] Calificación de ${chatID}: ${body}`);
             const ratingMatch = body.match(/\d/);
             let ratingVal = ratingMatch ? parseInt(ratingMatch[0]) : 5;
 
@@ -197,13 +237,13 @@ client.on('message_create', async (message) => {
                 comentario: body,
                 fecha: new Date().toISOString()
             };
-            const filepath = path.join(__dirname, 'ratings.json');
-            let fileData = [];
-            try { if (fs.existsSync(filepath)) fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
-            fileData.push(dataObj);
-            try { fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2)); } catch(e) {}
 
-            // Resetear TODO
+            // Guardar en Supabase O en JSON local
+            if (supabase.isConfigured()) {
+                await supabase.guardarRating(dataObj);
+            }
+            guardarEnJSON('ratings.json', dataObj); // Siempre guardar backup local
+
             sesion.historial = [];
             sesion.carrito = [];
             sesion.esperandoCalificacion = false;
@@ -213,24 +253,24 @@ client.on('message_create', async (message) => {
             return;
         }
 
-        // Limitar historial a los últimos 20 mensajes
+        // Limitar historial
         if (sesion.historial.length > 20) {
             sesion.historial = sesion.historial.slice(-20);
         }
 
-        // --- LÓGICA DE MODO HUMANO ---
+        // --- MODO HUMANO ---
         if (message.fromMe) {
             const txt = body.trim().toLowerCase();
             if (txt === '!bot off') {
                 sesion.botActivo = false;
-                console.log(`🔴 Bot apagado manualmente para ${chatID}`);
+                console.log(`🔴 Bot apagado para ${chatID}`);
             } else if (txt === '!bot on') {
                 sesion.botActivo = true;
                 console.log(`🟢 Bot reactivado para ${chatID}`);
             } else if (body !== sesion.lastBotResponse) {
                 if (sesion.botActivo) {
                     sesion.botActivo = false;
-                    console.log(`🔴 Auto-pausa activada: El humano intervino en la conversación con ${chatID}`);
+                    console.log(`🔴 Auto-pausa: Humano intervino en ${chatID}`);
                 }
             }
             return;
@@ -238,92 +278,132 @@ client.on('message_create', async (message) => {
 
         if (!sesion.botActivo) return;
 
-        console.log(`\nMensaje recibido de ${chatID}: ${esAudio ? '[AUDIO]' : body}`);
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📩 Mensaje de ${chatID}: ${esAudio ? '[AUDIO]' : esImagen ? '[IMAGEN]' : body}`);
+        console.log(`${'='.repeat(60)}`);
 
-        // --- BIENVENIDA PARA CLIENTES NUEVOS ---
+        // --- BIENVENIDA ---
         if (esNuevo && !message.fromMe) {
             const bienvenida = `¡Hola! 👋 Soy el asistente de *Agua Marina*.
 📦 Puedo ayudarte a armar tu pedido de productos de limpieza.
 💰 Decime qué necesitás y te paso precios al instante.
-🎙️ También podés mandarme un audio con tu pedido.
+🎙️ Podés mandarme un audio o una foto.
 🕐 Entregas: Lunes a Sábados de 8 a 13hs.
 
 ¿En qué te puedo ayudar?`;
             sesion.lastBotResponse = bienvenida;
             guardarSesiones();
             await client.sendMessage(chatID, bienvenida);
-            console.log(`🌟 Bienvenida enviada a nuevo cliente ${chatID}`);
+            console.log(`🌟 Bienvenida enviada a ${chatID}`);
             return;
         }
 
-        // ========================
-        // UPGRADE 3: TRANSCRIPCIÓN DE AUDIO
-        // ========================
+        // ============================================================
+        // 🧠 ENJAMBRE — FASE 1: PERCEPCIÓN (Oídos + Ojos)
+        // ============================================================
         let textoParaIA = body;
-        
+
+        // 🎙️ AGENTE OÍDOS (Transcripción de audio)
         if (esAudio) {
             try {
-                console.log(`🎙️ Descargando audio de ${chatID}...`);
                 const media = await message.downloadMedia();
-                
                 if (media && media.data) {
-                    console.log(`🎙️ Audio descargado. Mimetype: ${media.mimetype}, Size: ${Math.round(media.data.length * 0.75 / 1024)}KB. Enviando a Gemini...`);
-                    
-                    // Enviar audio directamente a Gemini para transcripción
-                    const transcriptionResponse = await axios.post(
-                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-                        {
-                            contents: [{
-                                role: "user",
-                                parts: [
-                                    {
-                                        inlineData: {
-                                            mimeType: media.mimetype || 'audio/ogg',
-                                            data: media.data
-                                        }
-                                    },
-                                    {
-                                        text: "Transcribí este audio de voz de un cliente de una distribuidora de productos de limpieza. Devolvé SOLAMENTE el texto transcripto, sin comentarios ni explicaciones. Si no se entiende algo, poné [inaudible]."
-                                    }
-                                ]
-                            }]
-                        },
-                        { headers: { "Content-Type": "application/json" }, timeout: 30000 }
-                    );
-                    
-                    textoParaIA = transcriptionResponse.data.candidates[0].content.parts[0].text;
-                    console.log(`🎙️ Transcripción exitosa: "${textoParaIA}"`);
-                    
-                    // Notificar al cliente que entendimos su audio
-                    await client.sendMessage(chatID, `🎙️ _Entendido:_ "${textoParaIA}"\n\n_Procesando tu pedido..._`);
+                    textoParaIA = await agenteOidos(media.data, media.mimetype, GEMINI_KEY);
+                    await client.sendMessage(chatID, `🎙️ _Entendido:_ "${textoParaIA}"\n\n_Procesando..._`);
                 } else {
-                    await client.sendMessage(chatID, "No pude descargar el audio. ¿Podrías escribirme el pedido por texto?");
+                    await client.sendMessage(chatID, "No pude descargar el audio. ¿Podrías escribirme el pedido? 🙏");
                     return;
                 }
-            } catch (audioError) {
-                console.error("Error transcribiendo audio:", audioError.message);
-                await client.sendMessage(chatID, "No pude procesar el audio en este momento. ¿Podrías escribirme el pedido por texto? 🙏");
+            } catch (err) {
+                console.error("Error en Agente Oídos:", err.message);
+                await client.sendMessage(chatID, "No pude procesar el audio. ¿Podrías escribirme el pedido? 🙏");
                 return;
             }
+        }
+
+        // 👁️ AGENTE OJOS (Análisis de imágenes)
+        if (esImagen) {
+            try {
+                const media = await message.downloadMedia();
+                if (media && media.data) {
+                    const descripcion = await agenteOjos(media.data, media.mimetype, GEMINI_KEY);
+                    // Combinar la descripción visual con cualquier texto que haya mandado
+                    textoParaIA = body
+                        ? `${body} [El cliente también envió una imagen. Descripción: ${descripcion}]`
+                        : `[El cliente envió una imagen. Descripción: ${descripcion}]`;
+                    await client.sendMessage(chatID, `👁️ _Vi tu imagen:_ "${descripcion}"\n\n_Buscando en el catálogo..._`);
+                } else {
+                    await client.sendMessage(chatID, "No pude ver la imagen. ¿Podrías describirme qué necesitás? 🙏");
+                    return;
+                }
+            } catch (err) {
+                console.error("Error en Agente Ojos:", err.message);
+                await client.sendMessage(chatID, "No pude analizar la imagen. ¿Podrías describirme qué necesitás? 🙏");
+                return;
+            }
+        }
+
+        // 🛡️ SANITIZAR INPUT
+        textoParaIA = sanitizeInput(textoParaIA);
+        if (!textoParaIA) return;
+
+        // ============================================================
+        // 🧠 ENJAMBRE — FASE 2: CLASIFICACIÓN (Recepcionista)
+        // ============================================================
+        const intencion = await agenteRecepcionista(textoParaIA, OPENROUTER_KEY, GEMINI_KEY);
+        console.log(`🚪 Intención clasificada: ${intencion}`);
+
+        // Manejar intenciones que NO requieren al Vendedor
+        if (intencion === 'SPAM') {
+            console.log(`🗑️ Mensaje spam ignorado de ${chatID}`);
+            return;
+        }
+
+        if (intencion === 'HUMANO') {
+            sesion.botActivo = false;
+            guardarSesiones();
+            await client.sendMessage(chatID, "Entendido, te comunico con una persona del equipo de Agua Marina. En breve te van a responder. 🙏");
+            console.log(`🔴 Transferencia a humano solicitada por ${chatID}`);
+            return;
+        }
+
+        if (intencion === 'SALUDO') {
+            sesion.historial.push({ role: "user", content: textoParaIA });
+            const saludo = "¡Hola! 👋 ¿En qué te puedo ayudar hoy? Podés pedirme productos, mandarme un audio o una foto.";
+            sesion.historial.push({ role: "assistant", content: saludo });
+            sesion.lastBotResponse = saludo;
+            guardarSesiones();
+            await client.sendMessage(chatID, saludo);
+            return;
         }
 
         // --- COMANDO REPETIR ---
         const bodyLower = textoParaIA.trim().toLowerCase();
         if (bodyLower === 'repetir' || bodyLower === 'mismo pedido' || bodyLower === 'lo de siempre' || bodyLower === 'lo mismo') {
             try {
-                const pedidosFile = path.join(__dirname, 'pedidos.json');
-                if (fs.existsSync(pedidosFile)) {
-                    const pedidos = JSON.parse(fs.readFileSync(pedidosFile, 'utf8'));
-                    const ultimoPedido = [...pedidos].reverse().find(p => p.cliente_id === chatID || p.cliente_id?.includes(chatID.replace('@c.us', '')));
-                    if (ultimoPedido) {
-                        sesion.historial.push({ role: "user", content: `Quiero repetir mi último pedido. Los productos eran: ${JSON.stringify(ultimoPedido.productos)}. Total anterior: $${ultimoPedido.total}. Confirmámelo por favor.` });
-                    } else {
-                        await client.sendMessage(chatID, 'No encontré pedidos anteriores tuyos. ¿Qué te gustaría pedir?');
-                        guardarSesiones();
-                        return;
+                let ultimoPedido = null;
+
+                if (supabase.isConfigured()) {
+                    ultimoPedido = await supabase.obtenerUltimoPedido(chatID);
+                }
+
+                if (!ultimoPedido) {
+                    const pedidosFile = path.join(__dirname, 'pedidos.json');
+                    if (fs.existsSync(pedidosFile)) {
+                        const pedidos = JSON.parse(fs.readFileSync(pedidosFile, 'utf8'));
+                        ultimoPedido = [...pedidos].reverse().find(p =>
+                            p.cliente_id === chatID || p.cliente_id?.includes(chatID.replace('@c.us', ''))
+                        );
                     }
+                }
+
+                if (ultimoPedido) {
+                    sesion.historial.push({
+                        role: "user",
+                        content: `Quiero repetir mi último pedido. Los productos eran: ${JSON.stringify(ultimoPedido.productos)}. Total anterior: $${ultimoPedido.total}. Confirmámelo por favor.`
+                    });
                 } else {
-                    await client.sendMessage(chatID, 'Todavía no tenés pedidos anteriores. ¿Qué te gustaría pedir?');
+                    await client.sendMessage(chatID, 'No encontré pedidos anteriores tuyos. ¿Qué te gustaría pedir?');
                     guardarSesiones();
                     return;
                 }
@@ -334,39 +414,31 @@ client.on('message_create', async (message) => {
             sesion.historial.push({ role: "user", content: textoParaIA });
         }
 
-        // ========================
-        // LLAMADA A LA IA
-        // ========================
+        // ============================================================
+        // 🧠 ENJAMBRE — FASE 3: VENTA (Vendedor Estrella)
+        // ============================================================
         try {
             // OBTENER CATÁLOGO CON CACHÉ
             if (Date.now() - lastFetchTime > CACHE_TTL || !cacheCatalogoReducido) {
                 try {
-                    console.log("Descargando catálogo fresco desde GitHub...");
+                    console.log("📦 Descargando catálogo desde GitHub...");
                     const res = await axios.get(CATALOGO_URL);
                     const catalogoActual = res.data;
-
-                    const lineasCatalogo = catalogoActual.map(p => {
-                        return `Cod:${p.codigo || '-'} | ${p.nombre} | ${p.presentacion || '-'} | May:$${p.precio_mayorista} | Min:$${p.precio_minorista} | Stock:${p.sin_stock ? 'NO' : 'SI'}`;
-                    });
+                    const lineasCatalogo = catalogoActual.map(p =>
+                        `Cod:${p.codigo || '-'} | ${p.nombre} | ${p.presentacion || '-'} | May:$${p.precio_mayorista} | Min:$${p.precio_minorista} | Stock:${p.sin_stock ? 'NO' : 'SI'}`
+                    );
                     cacheCatalogoReducido = lineasCatalogo.join('\n');
                     lastFetchTime = Date.now();
                 } catch(e) {
-                    console.error("Error obteniendo catálogo. Usando caché anterior si existe.");
+                    console.error("Error obteniendo catálogo.");
                 }
             }
 
-            let aiResponse = "";
-
-            if (process.env.GEMINI_API_KEY) {
-                const googleContents = sesion.historial.map(m => ({
-                    role: m.role === "assistant" ? "model" : "user",
-                    parts: [{ text: m.content }]
-                }));
-
-                const systemPrompt = `${promptBase}
+            // Armar el prompt del sistema para el Vendedor
+            const systemPrompt = `${promptBase}
 
 [IMPORTANTE - INFO DEL CLIENTE ACTUAL]
-El ID (número de teléfono) de este cliente es: "${chatID.replace('@c.us', '')}". 
+El ID (número de teléfono) de este cliente es: "${chatID.replace('@c.us', '')}".
 DEBES usar este número exacto en todos los campos "cliente_id" de los JSON. ¡NO uses el número del ejemplo!
 
 CATÁLOGO ACTUALIZADO EN VIVO:
@@ -375,68 +447,31 @@ ${cacheCatalogoReducido}
 CARRITO ACTUAL:
 ${JSON.stringify(sesion.carrito)}`;
 
-                const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
-                    contents: googleContents,
-                    systemInstruction: {
-                        role: "system",
-                        parts: [{ text: systemPrompt }]
-                    },
-                    generationConfig: {
-                        temperature: 0.3
-                    }
-                }, {
-                    headers: { "Content-Type": "application/json" },
-                    timeout: 60000
-                });
-                aiResponse = response.data.candidates[0].content.parts[0].text;
-            } else if (process.env.OPENROUTER_API_KEY) {
-                const openaiMessages = [
-                    {
-                        role: "system",
-                        content: `${promptBase}\n\nCATÁLOGO ACTUALIZADO EN VIVO:\n${cacheCatalogoReducido}\n\nCARRITO ACTUAL:\n${JSON.stringify(sesion.carrito)}`
-                    },
-                    ...sesion.historial
-                ];
-                const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-                    model: "google/gemini-2.5-flash",
-                    messages: openaiMessages,
-                    temperature: 0.3
-                }, {
-                    headers: {
-                        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                        "Content-Type": "application/json"
-                    },
-                    timeout: 60000
-                });
-                aiResponse = response.data.choices[0].message.content;
-            } else {
-                aiResponse = "⚠️ Faltan las credenciales de Gemini (Variable de entorno GEMINI_API_KEY en Easypanel).";
-            }
+            // 💼 LLAMAR AL VENDEDOR ESTRELLA
+            const aiResponse = await agenteVendedor(sesion.historial, systemPrompt, OPENROUTER_KEY, GEMINI_KEY);
 
-            // ========================
-            // PROCESAMIENTO DE RESPUESTA
-            // ========================
+            // ============================================================
+            // 📦 PROCESAMIENTO DE RESPUESTA
+            // ============================================================
             let mensajeFinal = aiResponse;
 
-            console.log(`\n📝 RESPUESTA DE LA IA (${chatID}):`);
-            console.log(aiResponse.substring(0, 500));
+            console.log(`\n📝 Respuesta del Vendedor (${chatID}): ${aiResponse.substring(0, 300)}...`);
 
-            // Función para extraer, guardar y limpiar JSONs ocultos
-            const extractAndSave = (tagOpen, tagClose, filename) => {
+            // Extraer y guardar JSONs ocultos
+            const extractAndSave = (tagOpen, tagClose, filename, supabaseFunc) => {
                 const regex = new RegExp(`\\[${tagOpen}\\]([\\s\\S]*?)\\[\\/${tagClose}\\]`, 'gi');
                 let matches = [...mensajeFinal.matchAll(regex)];
-                matches.forEach(matchData => {
+                matches.forEach(async matchData => {
                     if (matchData && matchData[1]) {
                         try {
                             const dataObj = JSON.parse(matchData[1].trim());
                             mensajeFinal = mensajeFinal.replace(matchData[0], '').trim();
-                            const filepath = path.join(__dirname, filename);
-                            let fileData = [];
-                            if (fs.existsSync(filepath)) {
-                                try { fileData = JSON.parse(fs.readFileSync(filepath, 'utf8')); } catch(e) {}
+
+                            // Guardar en Supabase + JSON local (doble respaldo)
+                            if (supabase.isConfigured() && supabaseFunc) {
+                                await supabaseFunc(dataObj);
                             }
-                            fileData.push(dataObj);
-                            fs.writeFileSync(filepath, JSON.stringify(fileData, null, 2));
+                            guardarEnJSON(filename, dataObj);
                             console.log(`✅ Guardado ${tagOpen} en ${filename}`);
                         } catch(e) {
                             console.error(`Error parseando ${tagOpen}:`, e);
@@ -445,21 +480,19 @@ ${JSON.stringify(sesion.carrito)}`;
                 });
             };
 
-            extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json');
-            extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json');
-            extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json');
+            extractAndSave('PEDIDO_DATA', 'PEDIDO_DATA', 'pedidos.json', supabase.guardarPedido);
+            extractAndSave('RATING_DATA', 'RATING_DATA', 'ratings.json', supabase.guardarRating);
+            extractAndSave('CLIENTE_CALIDAD_DATA', 'CLIENTE_CALIDAD_DATA', 'clientes_calidad.json', supabase.guardarClienteCalidad);
 
-            // ========================
-            // DETECCIÓN Y GENERACIÓN DE REMITOS PDF
-            // ========================
+            // ============================================================
+            // 📄🖼️ GENERACIÓN DUAL DE REMITOS (PDF + Imagen)
+            // ============================================================
             let remitoMatches = [...mensajeFinal.matchAll(/\[REMITO_JSON\]([\s\S]*?)\[\/REMITO_JSON\]/gi)];
 
-            // Respaldo: bloques de código markdown
             if (remitoMatches.length === 0) {
                 let altMatch = mensajeFinal.match(/```(?:json)?\s*(\{[\s\S]*?"productos"[\s\S]*?\})\s*```/i);
                 if (altMatch) remitoMatches = [altMatch];
             }
-            // Respaldo: JSON crudo al final
             if (remitoMatches.length === 0) {
                 let altMatch = mensajeFinal.match(/(?:json|JSON)?\s*(\{[\s\S]*?"productos"[\s\S]*?"total"[\s\S]*?\})\s*$/i);
                 if (altMatch) remitoMatches = [altMatch];
@@ -468,7 +501,7 @@ ${JSON.stringify(sesion.carrito)}`;
             console.log(`📊 Remitos encontrados: ${remitoMatches.length}`);
 
             if (remitoMatches.length > 0) {
-                // Eliminar etiquetas JSON del mensaje visible
+                // Limpiar etiquetas del mensaje visible
                 for (const match of remitoMatches) {
                     if (match && match[0]) {
                         mensajeFinal = mensajeFinal.replace(match[0], '').trim();
@@ -480,27 +513,52 @@ ${JSON.stringify(sesion.carrito)}`;
                     sesion.lastBotResponse = mensajeFinal;
                     await client.sendMessage(chatID, mensajeFinal);
                 } else {
-                    sesion.historial.push({ role: "assistant", content: "[Remito generado y enviado al cliente en formato PDF]" });
+                    sesion.historial.push({ role: "assistant", content: "[Remito generado]" });
                 }
 
-                // Generar PDFs con PDFKit (UPGRADE 2)
+                // Generar y enviar cada remito
                 for (const match of remitoMatches) {
                     if (match && match[1]) {
                         try {
                             const remitoData = JSON.parse(match[1].trim());
-                            console.log(`📄 Generando PDF con PDFKit para ${remitoData.nombre}...`);
 
-                            const pdfPath = await generarRemitoPDF(remitoData);
-                            const media = MessageMedia.fromFilePath(pdfPath);
-                            await client.sendMessage(chatID, media, { caption: `📄 Remito oficial` });
+                            // 🛡️ VALIDACIÓN DE SEGURIDAD
+                            const validation = validateRemito(remitoData, cacheCatalogoReducido);
+                            if (!validation.valid) {
+                                console.error(`⚠️ [SEGURIDAD] Remito inválido:`, validation.errors);
+                                await client.sendMessage(chatID, `⚠️ Hubo un error con el cálculo. Dejame revisar...`);
+                                continue;
+                            }
 
-                            // Limpiar archivo temporal
-                            try { fs.unlinkSync(pdfPath); } catch(e) {}
-                            console.log(`✅ PDF enviado exitosamente para ${remitoData.nombre}`);
+                            console.log(`📄 Generando remito dual para ${remitoData.nombre}...`);
+
+                            // 🖼️ PRIMERO: Enviar Vista Rápida (Imagen/Ticket)
+                            try {
+                                const imgPath = await generarRemitoImagen(remitoData);
+                                const imgMedia = MessageMedia.fromFilePath(imgPath);
+                                await client.sendMessage(chatID, imgMedia, { caption: '🖼️ Vista rápida del remito' });
+                                try { fs.unlinkSync(imgPath); } catch(e) {}
+                                console.log(`🖼️ Vista rápida enviada`);
+                            } catch(imgErr) {
+                                console.error("Error generando vista rápida:", imgErr.message);
+                            }
+
+                            // 📄 DESPUÉS: Enviar PDF Formal
+                            try {
+                                const pdfPath = await generarRemitoPDF(remitoData);
+                                const pdfMedia = MessageMedia.fromFilePath(pdfPath);
+                                await client.sendMessage(chatID, pdfMedia, { caption: '📄 Remito oficial (PDF)' });
+                                try { fs.unlinkSync(pdfPath); } catch(e) {}
+                                console.log(`📄 PDF formal enviado`);
+                            } catch(pdfErr) {
+                                console.error("Error generando PDF:", pdfErr.message);
+                            }
+
+                            console.log(`✅ Remito dual completado para ${remitoData.nombre}`);
 
                         } catch(e) {
-                            console.error("Error generando PDF:", e);
-                            await client.sendMessage(chatID, `⚠️ Hubo un error generando el PDF. Tu pedido está confirmado de todas formas. Error: ${e.message}`);
+                            console.error("Error procesando remito:", e);
+                            await client.sendMessage(chatID, `⚠️ Tu pedido está confirmado pero hubo un error generando el remito. Error: ${e.message}`);
                         }
                     }
                 }
@@ -509,20 +567,18 @@ ${JSON.stringify(sesion.carrito)}`;
                 sesion.carrito = [];
                 sesion.esperandoCalificacion = true;
                 guardarSesiones();
-                console.log(`🧹 Carrito limpiado para ${chatID}. Modo espera de calificación activado.`);
+                console.log(`🧹 Carrito limpiado. Modo espera de calificación activado.`);
 
             } else {
-                // Sin remito: comportamiento normal
+                // Sin remito: respuesta normal
                 mensajeFinal = mensajeFinal.trim();
-
                 if (mensajeFinal === "") {
                     mensajeFinal = "¡Listo! ¿Te puedo ayudar con algo más?";
                 }
 
                 sesion.historial.push({ role: "assistant", content: mensajeFinal });
-
                 if (sesion.historial.length > 40) {
-                    sesion.historial = sesion.historial.slice(sesion.historial.length - 40);
+                    sesion.historial = sesion.historial.slice(-40);
                 }
 
                 sesion.lastBotResponse = mensajeFinal;
@@ -532,36 +588,35 @@ ${JSON.stringify(sesion.carrito)}`;
             }
 
         } catch (aiError) {
-            console.error("Error en llamada a IA:", aiError.message);
-
+            console.error("Error en Enjambre IA:", aiError.message);
             let debugInfo = aiError.message;
             if (aiError.response && aiError.response.data) {
                 debugInfo = JSON.stringify(aiError.response.data, null, 2);
             }
-            if (debugInfo.length > 800) {
-                debugInfo = debugInfo.substring(0, 800) + "... [truncado]";
-            }
+            if (debugInfo.length > 800) debugInfo = debugInfo.substring(0, 800) + "...";
 
             try {
-                await client.sendMessage(chatID, `Disculpa, estoy experimentando problemas técnicos temporales. ¿Podrías intentar de nuevo en unos segundos?\n\n*DEBUG:*\n\`\`\`\n${debugInfo}\n\`\`\``);
-            } catch (sendError) {
-                console.error("Error crítico enviando fallback:", sendError);
+                await client.sendMessage(chatID, `Disculpa, estoy teniendo problemas técnicos. ¿Podrías intentar de nuevo? 🙏\n\n*DEBUG:*\n\`\`\`\n${debugInfo}\n\`\`\``);
+            } catch (sendErr) {
+                console.error("Error enviando fallback:", sendErr);
             }
         }
 
     } catch (globalError) {
-        // UPGRADE 5: CATCH GLOBAL - El bot NUNCA se cuelga
-        console.error("💀 ERROR GLOBAL CAPTURADO:", globalError);
+        // 🛡️ CATCH GLOBAL — El bot NUNCA se cuelga
+        console.error("💀 ERROR GLOBAL:", globalError);
         try {
             const chatID = message.fromMe ? message.to : message.from;
             if (chatID) {
                 await client.sendMessage(chatID, "Disculpa, tuve un error inesperado. ¿Podrías repetir tu mensaje? 🙏");
             }
         } catch(e) {
-            console.error("Error en catch global al intentar notificar:", e);
+            console.error("Error en catch global:", e);
         }
     }
-// --- FIX CHROME LOCK (Evita crashear al hacer Deploy en Easypanel) ---
+});
+
+// --- FIX CHROME LOCK ---
 const authDir = path.join(__dirname, '.wwebjs_auth');
 if (fs.existsSync(authDir)) {
     const lockFiles = [
@@ -571,14 +626,14 @@ if (fs.existsSync(authDir)) {
         path.join(authDir, 'session', 'Default', 'SingletonCookie')
     ];
     lockFiles.forEach(file => {
-        try { if (fs.existsSync(file)) fs.unlinkSync(file); console.log('🧹 Archivo Lock de Chrome eliminado:', file); } catch(e) {}
+        try { if (fs.existsSync(file)) fs.unlinkSync(file); console.log('🧹 Lock eliminado:', file); } catch(e) {}
     });
 }
 
 client.initialize();
 
 // ============================================================
-// EXPRESS API PARA DASHBOARD
+// 🌐 EXPRESS API PARA DASHBOARD
 // ============================================================
 const app = express();
 
@@ -596,24 +651,42 @@ const getJsonFile = (filename) => {
     return [];
 };
 
-app.get('/api/pedidos', (req, res) => res.json(getJsonFile('pedidos.json')));
-app.get('/api/ratings', (req, res) => res.json(getJsonFile('ratings.json')));
+// Rutas con fallback: Supabase primero, JSON local después
+app.get('/api/pedidos', async (req, res) => {
+    if (supabase.isConfigured()) {
+        const data = await supabase.obtenerPedidos();
+        if (data.length > 0) return res.json(data);
+    }
+    res.json(getJsonFile('pedidos.json'));
+});
+
+app.get('/api/ratings', async (req, res) => {
+    if (supabase.isConfigured()) {
+        const data = await supabase.obtenerRatings();
+        if (data.length > 0) return res.json(data);
+    }
+    res.json(getJsonFile('ratings.json'));
+});
+
 app.get('/api/clientes_calidad', (req, res) => res.json(getJsonFile('clientes_calidad.json')));
 
-// Endpoint de health check
 app.get('/api/status', (req, res) => {
     const uptimeMs = Date.now() - BOT_START_TIME;
     const memUsage = process.memoryUsage();
     res.json({
         status: 'online',
-        version: '2.0',
+        version: BOT_VERSION,
         uptime_minutes: Math.floor(uptimeMs / 60000),
         ram_mb: (memUsage.rss / 1024 / 1024).toFixed(1),
-        sesiones_activas: Object.keys(sesiones).length
+        sesiones_activas: Object.keys(sesiones).length,
+        swarm_agents: ['oidos', 'ojos', 'recepcionista', 'vendedor'],
+        database: supabase.isConfigured() ? 'supabase' : 'json_local',
+        security: ['rate_limiter', 'sanitizer', 'remito_validator']
     });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 API interna escuchando en el puerto ${PORT}`);
+    console.log(`🚀 API Dashboard en puerto ${PORT}`);
+    console.log(`🌊 ¡AGUA MARINA ENTERPRISE SWARM v3.0 — COMPLETAMENTE OPERATIVO!`);
 });
