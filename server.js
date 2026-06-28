@@ -223,6 +223,15 @@ client.on('message_create', async (message) => {
 
         const sesion = sesiones[chatID];
 
+        // --- TIMEOUT DE 3 MINUTOS ---
+        if (sesion.lastInteraction && (Date.now() - sesion.lastInteraction > 3 * 60 * 1000)) {
+            console.log(`[TIMEOUT] Limpiando sesión de ${chatID} por inactividad (>3 min)`);
+            sesion.historial = [];
+            sesion.carrito = [];
+            sesion.esperandoCalificacion = false;
+        }
+        sesion.lastInteraction = Date.now();
+
         // ========================
         // ⭐ RATING BYPASS (Sistema Híbrido)
         // ========================
@@ -244,7 +253,7 @@ client.on('message_create', async (message) => {
             }
             guardarEnJSON('ratings.json', dataObj); // Siempre guardar backup local
 
-            sesion.historial = [];
+            // NO borramos el historial para permitir pedidos secundarios
             sesion.carrito = [];
             sesion.esperandoCalificacion = false;
             guardarSesiones();
