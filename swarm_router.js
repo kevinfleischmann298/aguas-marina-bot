@@ -155,7 +155,7 @@ async function agenteVendedor(historial, systemPrompt, openrouterApiKey, geminiA
                 ...historial
             ];
             const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-                model: "anthropic/claude-sonnet-latest",
+                model: "anthropic/claude-sonnet-4.5",
                 messages: messages,
                 temperature: 0.2
             }, {
