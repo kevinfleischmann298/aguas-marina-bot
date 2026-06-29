@@ -238,28 +238,39 @@ client.on('message_create', async (message) => {
         if (sesion.esperandoCalificacion) {
             console.log(`[RATING BYPASS] Calificación de ${chatID}: ${body}`);
             const ratingMatch = body.match(/\d/);
-            let ratingVal = ratingMatch ? parseInt(ratingMatch[0]) : 5;
+            if (!ratingMatch) {
+                // Si no mandó un número, ignoramos este bypass y dejamos que la IA procese el mensaje normalmente
+                // Pero primero desactivamos la espera de calificación para que no se trabe
+                sesion.esperandoCalificacion = false;
+                guardarSesiones();
+                // No hacemos return, dejamos que el código siga hacia el Enjambre IA
+            } else {
+                let ratingVal = parseInt(ratingMatch[0]);
 
-            const dataObj = {
-                cliente_id: chatID,
-                rating: ratingVal,
-                comentario: body,
-                fecha: new Date().toISOString()
-            };
+                const dataObj = {
+                    cliente_id: chatID,
+                    rating: ratingVal,
+                    comentario: body,
+                    fecha: new Date().toISOString()
+                };
 
-            // Guardar en Supabase O en JSON local
-            if (supabase.isConfigured()) {
-                await supabase.guardarRating(dataObj);
+                // Guardar en Supabase O en JSON local
+                if (supabase.isConfigured()) {
+                    await supabase.guardarRating(dataObj);
+                }
+                guardarEnJSON('ratings.json', dataObj); // Siempre guardar backup local
+
+                // NO borramos el historial para permitir pedidos secundarios
+                sesion.carrito = [];
+                sesion.esperandoCalificacion = false;
+                
+                const respuestaGracias = "¡Muchas gracias por tu calificación! 🌟 ¿En qué más te puedo ayudar hoy?";
+                sesion.lastBotResponse = respuestaGracias; // PREVIENE AUTO-PAUSA!
+                guardarSesiones();
+
+                await client.sendMessage(chatID, respuestaGracias);
+                return;
             }
-            guardarEnJSON('ratings.json', dataObj); // Siempre guardar backup local
-
-            // NO borramos el historial para permitir pedidos secundarios
-            sesion.carrito = [];
-            sesion.esperandoCalificacion = false;
-            guardarSesiones();
-
-            await client.sendMessage(chatID, "¡Muchas gracias por tu calificación! 🌟 ¿En qué más te puedo ayudar hoy?");
-            return;
         }
 
         // Limitar historial
