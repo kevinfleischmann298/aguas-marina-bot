@@ -22,7 +22,7 @@ async function agenteOidos(audioBase64, mimetype, geminiApiKey) {
                 parts: [
                     {
                         inlineData: {
-                            mimeType: mimetype || 'audio/ogg',
+                            mimeType: (mimetype || 'audio/ogg').split(';')[0],
                             data: audioBase64
                         }
                     },
@@ -55,7 +55,7 @@ async function agenteOjos(imageBase64, mimetype, geminiApiKey) {
                 parts: [
                     {
                         inlineData: {
-                            mimeType: mimetype || 'image/jpeg',
+                            mimeType: (mimetype || 'image/jpeg').split(';')[0],
                             data: imageBase64
                         }
                     },
