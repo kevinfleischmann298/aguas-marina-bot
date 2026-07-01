@@ -399,15 +399,7 @@ client.on('message_create', async (message) => {
             return;
         }
 
-        if (intencion === 'SALUDO') {
-            sesion.historial.push({ role: "user", content: textoParaIA });
-            const saludo = "¡Hola! 👋 ¿En qué te puedo ayudar hoy? Podés pedirme productos, mandarme un audio o una foto.";
-            sesion.historial.push({ role: "assistant", content: saludo });
-            sesion.lastBotResponse = saludo;
-            guardarSesiones();
-            await client.sendMessage(chatID, saludo);
-            return;
-        }
+        // Eliminar bloque SALUDO - ahora lo maneja Claude directamente
 
         // --- COMANDO REPETIR ---
         const bodyLower = textoParaIA.trim().toLowerCase();
