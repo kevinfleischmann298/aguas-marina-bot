@@ -329,7 +329,10 @@ client.on('message_create', async (message) => {
                 const media = await message.downloadMedia();
                 if (media && media.data) {
                     textoParaIA = await agenteOidos(media.data, media.mimetype, GEMINI_KEY);
-                    await client.sendMessage(chatID, `🎙️ _Entendido:_ "${textoParaIA}"\n\n_Procesando..._`);
+                    const respAudio = `🎙️ _Entendido:_ "${textoParaIA}"\n\n_Procesando..._`;
+                    sesion.lastBotResponse = respAudio;
+                    guardarSesiones();
+                    await client.sendMessage(chatID, respAudio);
                 } else {
                     await client.sendMessage(chatID, "No pude descargar el audio. ¿Podrías escribirme el pedido? 🙏");
                     return;
@@ -351,7 +354,10 @@ client.on('message_create', async (message) => {
                     textoParaIA = body
                         ? `${body} [El cliente también envió una imagen. Descripción: ${descripcion}]`
                         : `[El cliente envió una imagen. Descripción: ${descripcion}]`;
-                    await client.sendMessage(chatID, `👁️ _Vi tu imagen:_ "${descripcion}"\n\n_Buscando en el catálogo..._`);
+                    const respImagen = `👁️ _Vi tu imagen:_ "${descripcion}"\n\n_Buscando en el catálogo..._`;
+                    sesion.lastBotResponse = respImagen;
+                    guardarSesiones();
+                    await client.sendMessage(chatID, respImagen);
                 } else {
                     await client.sendMessage(chatID, "No pude ver la imagen. ¿Podrías describirme qué necesitás? 🙏");
                     return;
