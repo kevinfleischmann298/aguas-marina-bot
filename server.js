@@ -339,7 +339,10 @@ client.on('message_create', async (message) => {
                 }
             } catch (err) {
                 console.error("Error en Agente Oídos:", err.message);
-                await client.sendMessage(chatID, "No pude procesar el audio. ¿Podrías escribirme el pedido? 🙏");
+                const errorMsg = "No pude procesar el audio. ¿Podrías escribirme el pedido? 🙏";
+                sesion.lastBotResponse = errorMsg;
+                guardarSesiones();
+                await client.sendMessage(chatID, errorMsg);
                 return;
             }
         }
@@ -364,7 +367,10 @@ client.on('message_create', async (message) => {
                 }
             } catch (err) {
                 console.error("Error en Agente Ojos:", err.message);
-                await client.sendMessage(chatID, "No pude analizar la imagen. ¿Podrías describirme qué necesitás? 🙏");
+                const errorMsg = "No pude analizar la imagen. ¿Podrías describirme qué necesitás? 🙏";
+                sesion.lastBotResponse = errorMsg;
+                guardarSesiones();
+                await client.sendMessage(chatID, errorMsg);
                 return;
             }
         }
